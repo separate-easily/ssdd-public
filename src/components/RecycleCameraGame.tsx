@@ -12,7 +12,7 @@
  * 파일 위치: src/components/RecycleCameraGame.tsx
  */
 
-import { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback } from 'react';
 import { useWebcam } from '../hooks/useWebcam';
 import { useMissionState } from '../hooks/useMissionState';
 import { fakeYoloAnalyze } from '../services/fakeYolo';
@@ -49,6 +49,14 @@ export function RecycleCameraGame({ onExit }: RecycleCameraGameProps) {
     categoryLabel,
     isAnalyzing,
   } = useMissionState({ debugLabel: 'RecycleGame' });
+
+  // ============================================================
+  // Phase 변화 디버그 로그
+  // ============================================================
+
+  useEffect(() => {
+    console.log('[RecycleCameraGame] phase:', state.phase);
+  }, [state.phase]);
 
   // ============================================================
   // Phase 변화 시 TTS 및 자동 전이 처리
