@@ -1,10 +1,15 @@
 // @ts-nocheck
 /* eslint-disable */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { ArrowLeft, ArrowRight, Eye, Plus, Check, X, ChevronRight, ChevronLeft } from 'lucide-react';
+import { RecycleCameraGame } from '../../components/RecycleCameraGame';
+import type { ChildProfile } from '../../domain/childProfile';
+import { mapSupabaseChildToChildProfile } from '../../domain/childProfile';
+// DEMO_MODE 제거됨 - Supabase만 사용
+import { SUPABASE_FUNCTIONS_BASE_URL, publicAnonKey as anonKey } from '../../../utils/supabase/info';
 
 interface GameScreenProps {
   institutionId: string;
@@ -87,7 +92,7 @@ const CLASSIFICATION_ITEMS = [
 // 저학년(1~3학년) OX 퀴즈 문제
 const OX_QUIZ_ITEMS = [
   // 플라스틱 (1~10)
-  { emoji: '🧃', question: '빈 페트병은 씻어서 버린다.', answer: true, reason: '안에 남은 음료가 있으면 재활용이 안 ���요.' },
+  { emoji: '🧃', question: '빈 페트병은 씻어서 버린다.', answer: true, reason: '안에 남은 음료가 있으면 재활용이 안 돼요.' },
   { emoji: '🧃', question: '물이 남아 있는 페트병은 그대로 버려도 된다.', answer: false, reason: '물이 있으면 다른 재활용품이 더러워져요.' },
   { emoji: '🧃', question: '페트병은 플라스틱이다.', answer: true, reason: '페트병은 플라스틱으로 만들어졌어요.' },
   { emoji: '🧃', question: '페트병 뚜껑은 따로 버린다.', answer: true, reason: '뚜껑과 병은 재질이 달라요.' },
@@ -424,10 +429,25 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
   const [items, setItems] = useState<any[]>([]);
   const [showAnswer, setShowAnswer] = useState(false);
   const [children, setChildren] = useState<Child[]>([]);
-  const [selectedChildId, setSelectedChildId] = useState('');
+  const [childrenLoadError, setChildrenLoadError] = useState<boolean>(false); // 서버 연결 실패 시 true
+  const [selectedChildIds, setSelectedChildIds] = useState<string[]>([]); // 복수 선택 지원
   const [points, setPoints] = useState(10);
   const [isGameFinished, setIsGameFinished] = useState(false); // 게임 완료 상태 추가
   const [isPanelOpen, setIsPanelOpen] = useState(false); // 포인트 패널 열림 상태
+
+  // === 새로운 게임 로직 상태 ===
+  const [selectedOption, setSelectedOption] = useState<number | boolean | string | null>(null); // 사용자가 선택한 옵션
+  const [isCorrect, setIsCorrect] = useState<boolean | null>(null); // 정답 여부
+  const [gameMode, setGameMode] = useState<'class' | 'team'>('class'); // 게임 모드: 반 전체 or 팀
+  const [selectedTeams, setSelectedTeams] = useState<string[]>([]); // 참여할 팀 목록
+  const [classScore, setClassScore] = useState(0); // 반 전체 점수
+  const [teamScores, setTeamScores] = useState<Record<string, number>>({}); // 팀별 점수
+  const [correctCount, setCorrectCount] = useState(0); // 맞춘 문제 수
+  const [wrongCount, setWrongCount] = useState(0); // 틀린 문제 수
+
+  // 기관의 게임 팀 목록 추출 (className 필드 사용)
+  // team = 반 이름 (돌고래반), className = 게임 팀 (1팀)
+  const teams = Array.from(new Set(children.filter(c => c.className).map(c => c.className!)));
 
   // Load children when institution changes
   useEffect(() => {
@@ -441,12 +461,14 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
     if (showAnswer) {
       const timer = setTimeout(() => {
         setShowAnswer(false);
+        setSelectedOption(null);
+        setIsCorrect(null);
         if (currentIndex < items.length - 1) {
           setCurrentIndex(currentIndex + 1);
         } else {
           setIsGameFinished(true);
         }
-      }, 2000); // 2초 후 자동으로 다음 문제로
+      }, 2500); // 2.5초 후 자동으로 다음 문제로 (피드백 확인 시간 추가)
 
       return () => clearTimeout(timer);
     }
@@ -495,7 +517,7 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
   const loadChildren = async (institutionId: string) => {
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-edd517d1/child/list/${institutionId}`,
+        `${SUPABASE_FUNCTIONS_BASE_URL}/child/list/${institutionId}`,
         {
           headers: {
             'Authorization': `Bearer ${publicAnonKey}`,
@@ -508,39 +530,170 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
           new Map(data.children.map((child: Child) => [child.qrId, child])).values()
         );
         setChildren(uniqueChildren as Child[]);
+        setChildrenLoadError(false);
       }
     } catch (error) {
       console.error('Failed to load children:', error);
+      setChildrenLoadError(true);
+      setChildren([]); // 에러 시 빈 배열로 초기화
     }
   };
 
   const addPoints = async () => {
-    if (!selectedChildId || !institutionId) return;
+    if (selectedChildIds.length === 0 || !institutionId) return;
 
     try {
-      const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-edd517d1/points/update`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${publicAnonKey}`,
-          },
-          body: JSON.stringify({
-            qrId: selectedChildId,
-            institutionId: institutionId,
-            points: points,
-          }),
-        }
+      // 선택된 모든 아이에게 포인트 지급
+      const promises = selectedChildIds.map(qrId =>
+        fetch(
+          `${SUPABASE_FUNCTIONS_BASE_URL}/points/update`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${publicAnonKey}`,
+            },
+            body: JSON.stringify({
+              qrId: qrId,
+              institutionId: institutionId,
+              points: points,
+            }),
+          }
+        )
       );
-      const data = await response.json();
-      if (data.success) {
-        // Reload children to get updated points
-        await loadChildren(institutionId);
-      }
+
+      await Promise.all(promises);
+      // Reload children to get updated points
+      await loadChildren(institutionId);
     } catch (error) {
       console.error('Failed to add points:', error);
       alert('포인트 추가 중 오류가 발생했습니다.');
+    }
+  };
+
+  // === 활동 로그 저장 및 포인트 업데이트 (기타 게임용) ===
+  const saveGameActivityLog = async (params: {
+    gameType: 'ox' | 'quiz' | 'card';
+    question: string;
+    isCorrect: boolean;
+    pointsDelta: number;
+  }) => {
+    const sessionId = `game_${Date.now()}`;
+
+    // 팀 모드일 때 - 팀에 속한 아이들에게 포인트 지급 + 로그 저장
+    if (gameMode === 'team' && selectedTeams.length > 0) {
+      // 선택된 팀에 속한 아이들 찾기 (className = 게임 팀)
+      const teamChildren = children.filter(c => c.className && selectedTeams.includes(c.className));
+
+      for (const child of teamChildren) {
+        try {
+          // 1. 활동 로그 저장
+          await fetch(
+            `${SUPABASE_FUNCTIONS_BASE_URL}/activity-log/save`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${publicAnonKey}`,
+              },
+              body: JSON.stringify({
+                childQrId: child.qrId,
+                institutionId,
+                sessionId,
+                roundId: `round_${currentIndex}`,
+                logType: `${params.gameType}_${params.isCorrect ? 'correct' : 'wrong'}`,
+                materialLabel: params.question.substring(0, 50), // 문제 일부 저장
+                pointsDelta: params.pointsDelta,
+                isCorrect: params.isCorrect,
+                gameMode: 'team',
+                participatingTeams: selectedTeams.join(','),
+              }),
+            }
+          );
+
+          // 2. 정답인 경우에만 실제 포인트 업데이트
+          if (params.isCorrect && params.pointsDelta > 0) {
+            await fetch(
+              `${SUPABASE_FUNCTIONS_BASE_URL}/points/update`,
+              {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${publicAnonKey}`,
+                },
+                body: JSON.stringify({
+                  qrId: child.qrId,
+                  institutionId: institutionId,
+                  points: params.pointsDelta,
+                }),
+              }
+            );
+          }
+        } catch (error) {
+          console.error('Failed to save activity log or update points:', error);
+        }
+      }
+
+      // 포인트 업데이트 후 children 목록 새로고침
+      if (params.isCorrect && params.pointsDelta > 0) {
+        await loadChildren(institutionId);
+      }
+    }
+    // 반 모드에서는 모든 아이들에게 포인트 지급
+    else if (gameMode === 'class') {
+      // 모든 아이에게 포인트 지급
+      for (const child of children) {
+        try {
+          // 1. 활동 로그 저장
+          await fetch(
+            `${SUPABASE_FUNCTIONS_BASE_URL}/activity-log/save`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${publicAnonKey}`,
+              },
+              body: JSON.stringify({
+                childQrId: child.qrId,
+                institutionId,
+                sessionId,
+                roundId: `round_${currentIndex}`,
+                logType: `${params.gameType}_${params.isCorrect ? 'correct' : 'wrong'}`,
+                materialLabel: params.question.substring(0, 50),
+                pointsDelta: params.pointsDelta,
+                isCorrect: params.isCorrect,
+                gameMode: 'class',
+              }),
+            }
+          );
+
+          // 2. 정답인 경우에만 실제 포인트 업데이트
+          if (params.isCorrect && params.pointsDelta > 0) {
+            await fetch(
+              `${SUPABASE_FUNCTIONS_BASE_URL}/points/update`,
+              {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${publicAnonKey}`,
+                },
+                body: JSON.stringify({
+                  qrId: child.qrId,
+                  institutionId: institutionId,
+                  points: params.pointsDelta,
+                }),
+              }
+            );
+          }
+        } catch (error) {
+          console.error('Failed to save class activity log or update points:', error);
+        }
+      }
+
+      // 포인트 업데이트 후 children 목록 새로고침
+      if (params.isCorrect && params.pointsDelta > 0) {
+        await loadChildren(institutionId);
+      }
     }
   };
 
@@ -557,15 +710,150 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
     setIsGameFinished(false);
     setCurrentIndex(0);
     setShowAnswer(false);
+    setSelectedOption(null);
+    setIsCorrect(null);
+    setClassScore(0);
+    setTeamScores({});
+    setCorrectCount(0);
+    setWrongCount(0);
   };
 
   const handlePrevious = () => {
-    setShowAnswer(false); 
+    setShowAnswer(false);
+    setSelectedOption(null);
+    setIsCorrect(null);
     if (currentIndex > 0) {
       setCurrentIndex(currentIndex - 1);
     } else {
       setCurrentIndex(items.length - 1);
     }
+  };
+
+  // === 정답/오답 판별 핸들러 ===
+  // 사지선다형: selectedIndex는 0~3
+  const handleClassificationAnswer = (selectedIndex: number) => {
+    if (showAnswer) return; // 이미 정답이 표시된 상태면 무시
+
+    setSelectedOption(selectedIndex);
+    const correct = selectedIndex === currentItem?.answer;
+    setIsCorrect(correct);
+
+    const pointsDelta = correct ? 5 : 0;
+
+    if (correct) {
+      setCorrectCount(prev => prev + 1);
+      // 정답 시 5점 추가
+      if (gameMode === 'class') {
+        setClassScore(prev => prev + 5);
+      } else {
+        // 팀 모드: 모든 참여 팀에 5점씩
+        setTeamScores(prev => {
+          const newScores = { ...prev };
+          selectedTeams.forEach(team => {
+            newScores[team] = (newScores[team] || 0) + 5;
+          });
+          return newScores;
+        });
+      }
+    } else {
+      setWrongCount(prev => prev + 1);
+      // 오답 시 감점 없음
+    }
+
+    // 활동 로그 저장
+    saveGameActivityLog({
+      gameType: 'quiz',
+      question: currentItem?.question || '',
+      isCorrect: correct,
+      pointsDelta,
+    });
+
+    setShowAnswer(true);
+  };
+
+  // OX 퀴즈형: selectedAnswer는 true(O) 또는 false(X)
+  const handleOXAnswer = (selectedAnswer: boolean) => {
+    if (showAnswer) return;
+
+    setSelectedOption(selectedAnswer);
+    const correct = selectedAnswer === currentItem?.answer;
+    setIsCorrect(correct);
+
+    const pointsDelta = correct ? 5 : 0;
+
+    if (correct) {
+      setCorrectCount(prev => prev + 1);
+      if (gameMode === 'class') {
+        setClassScore(prev => prev + 5);
+      } else {
+        setTeamScores(prev => {
+          const newScores = { ...prev };
+          selectedTeams.forEach(team => {
+            newScores[team] = (newScores[team] || 0) + 5;
+          });
+          return newScores;
+        });
+      }
+    } else {
+      setWrongCount(prev => prev + 1);
+    }
+
+    // 활동 로그 저장
+    saveGameActivityLog({
+      gameType: 'ox',
+      question: currentItem?.question || '',
+      isCorrect: correct,
+      pointsDelta,
+    });
+
+    setShowAnswer(true);
+  };
+
+  // 카드 매칭형: selectedAnswer는 'A' 또는 'B'
+  const handleCardAnswer = (selectedAnswer: 'A' | 'B') => {
+    if (showAnswer) return;
+
+    setSelectedOption(selectedAnswer);
+    const correct = selectedAnswer === currentItem?.answer;
+    setIsCorrect(correct);
+
+    const pointsDelta = correct ? 5 : 0;
+
+    if (correct) {
+      setCorrectCount(prev => prev + 1);
+      if (gameMode === 'class') {
+        setClassScore(prev => prev + 5);
+      } else {
+        setTeamScores(prev => {
+          const newScores = { ...prev };
+          selectedTeams.forEach(team => {
+            newScores[team] = (newScores[team] || 0) + 5;
+          });
+          return newScores;
+        });
+      }
+    } else {
+      setWrongCount(prev => prev + 1);
+    }
+
+    // 활동 로그 저장
+    saveGameActivityLog({
+      gameType: 'card',
+      question: currentItem?.question || '',
+      isCorrect: correct,
+      pointsDelta,
+    });
+
+    setShowAnswer(true);
+  };
+
+  // 팀 선택 토글
+  const toggleTeam = (team: string) => {
+    setSelectedTeams(prev =>
+      prev.includes(team)
+        ? prev.filter(t => t !== team)
+        : [...prev, team]
+    );
   };
 
   // 1. Game Menu Screen
@@ -581,7 +869,7 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
           </p>
 
           {/* 난이도 선택 탭 */}
-          <div className="inline-flex bg-white p-1 rounded-xl shadow-md border border-gray-100">
+          <div className="inline-flex bg-white p-1 rounded-xl shadow-md border border-gray-100 mb-4">
             <button
               onClick={() => setDifficulty('easy')}
               className={`px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${
@@ -603,9 +891,67 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
               🌳 고학년 (4~6학년)
             </button>
           </div>
+
+          {/* 참여 모드 선택 */}
+          <div className="mb-4">
+            <p className="text-sm text-gray-500 mb-2">참여 모드</p>
+            <div className="inline-flex bg-white p-1 rounded-xl shadow-md border border-gray-100">
+              <button
+                onClick={() => {
+                  setGameMode('class');
+                  setSelectedTeams([]);
+                }}
+                className={`px-5 py-2 rounded-lg text-sm font-bold transition-all ${
+                  gameMode === 'class'
+                    ? 'bg-blue-500 text-white shadow-sm'
+                    : 'text-gray-500 hover:text-blue-600 hover:bg-blue-50'
+                }`}
+              >
+                🏫 반 전체
+              </button>
+              <button
+                onClick={() => setGameMode('team')}
+                className={`px-5 py-2 rounded-lg text-sm font-bold transition-all ${
+                  gameMode === 'team'
+                    ? 'bg-orange-500 text-white shadow-sm'
+                    : 'text-gray-500 hover:text-orange-600 hover:bg-orange-50'
+                }`}
+              >
+                👥 팀별
+              </button>
+            </div>
+          </div>
+
+          {/* 팀 선택 (팀 모드일 때만 표시) */}
+          {gameMode === 'team' && teams.length > 0 && (
+            <div className="mb-4 max-w-md mx-auto">
+              <p className="text-sm text-gray-500 mb-2">참여할 팀 선택 (결석 시 제외 가능)</p>
+              <div className="flex flex-wrap justify-center gap-2">
+                {teams.map(team => (
+                  <button
+                    key={team}
+                    onClick={() => toggleTeam(team)}
+                    className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                      selectedTeams.includes(team)
+                        ? 'bg-orange-500 text-white shadow-md'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {selectedTeams.includes(team) ? '✓ ' : ''}{team}
+                  </button>
+                ))}
+              </div>
+              {selectedTeams.length === 0 && (
+                <p className="text-xs text-orange-500 mt-2">하나 이상의 팀을 선택해주세요</p>
+              )}
+            </div>
+          )}
+          {gameMode === 'team' && teams.length === 0 && (
+            <p className="text-sm text-orange-500 mb-4">등록된 팀이 없습니다. 아동 관리에서 팀을 설정해주세요.</p>
+          )}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl w-full">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-7xl w-full">
           {/* Game Card 1 */}
           <Card 
             className={`group cursor-pointer hover:shadow-2xl transition-all duration-300 border-2 overflow-hidden relative ${
@@ -688,7 +1034,57 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
               </p>
             </div>
           </Card>
+
+          {/* Game Card 4 - 분리배출 카메라 게임 */}
+          <Card
+            className="group cursor-pointer hover:shadow-2xl transition-all duration-300 border-2 overflow-hidden relative hover:border-cyan-400"
+            onClick={() => setSelectedGame('분리배출')}
+          >
+            <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity bg-gradient-to-br from-cyan-100/50 to-green-100/50" />
+            <div className="p-8 text-center relative z-10">
+              <div className="text-6xl mb-6 transform group-hover:scale-110 transition-transform duration-300">📷</div>
+              <h3 className="text-2xl font-bold text-gray-800 mb-2">분리배출 카메라</h3>
+              <p className="text-gray-600">
+                카메라로 쓰레기를 인식하고 올바르게 분리해요!
+              </p>
+              <div className="mt-3 inline-flex items-center gap-1 text-sm text-cyan-600 font-medium">
+                <span>🤖</span>
+                <span>AI 분석</span>
+              </div>
+            </div>
+          </Card>
         </div>
+      </div>
+    );
+  }
+
+  // 1.5. 분리배출 카메라 게임 화면
+  if (selectedGame === '분리배출') {
+    // children 배열을 ChildProfile로 변환
+    const childProfiles: ChildProfile[] = children.map((child) =>
+      mapSupabaseChildToChildProfile({
+        qrId: child.qrId,
+        name: child.name,
+        age: child.age,
+        points: child.points,
+        team: child.team,
+        institutionName: institutionName,
+      })
+    );
+
+    return (
+      <div className="absolute inset-0 bg-gradient-to-br from-cyan-50 via-teal-50 to-green-50 z-50 overflow-hidden">
+        <RecycleCameraGame
+          variant="embedded"
+          initialQrEnabled={true}
+          className={institutionName}
+          onExit={() => setSelectedGame(null)}
+          institutionId={institutionId}
+          projectId={projectId}
+          publicAnonKey={publicAnonKey}
+          children={childProfiles}
+          onChildrenRefresh={() => loadChildren(institutionId)}
+        />
       </div>
     );
   }
@@ -712,44 +1108,127 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
               <p className="text-xl sm:text-2xl md:text-3xl text-gray-700 mb-2 sm:mb-3 font-bold">
                 모든 문제를 완료했습니다! 👏
               </p>
+              {/* 게임 결과 요약 */}
+              <div className="bg-gradient-to-r from-yellow-100 to-orange-100 p-4 rounded-xl border-2 border-yellow-300 mb-6">
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="text-center">
+                    <p className="text-3xl font-bold text-green-600">✓ {correctCount}</p>
+                    <p className="text-sm text-gray-600">정답</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-3xl font-bold text-red-500">✗ {wrongCount}</p>
+                    <p className="text-sm text-gray-600">오답</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-3xl font-bold text-yellow-600">
+                      {gameMode === 'class' ? classScore : Object.values(teamScores).reduce((a, b) => a + b, 0)}점
+                    </p>
+                    <p className="text-sm text-gray-600">{gameMode === 'class' ? '반 점수' : '팀 점수'}</p>
+                  </div>
+                </div>
+                {gameMode === 'team' && selectedTeams.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-yellow-300">
+                    <p className="text-sm text-gray-600 mb-1">참여 팀:</p>
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {selectedTeams.map(team => (
+                        <span key={team} className="px-3 py-1 bg-orange-200 rounded-full text-sm font-medium">
+                          {team}: {teamScores[team] || 0}점
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <p className="text-base sm:text-lg md:text-xl text-gray-500 mb-4 sm:mb-6 md:mb-8">
-                총 {items.length}개 문제를 훌륭하게 풀었어요!
+                총 {items.length}개 문제 중 {correctCount}개를 맞췄어요!
               </p>
 
               {/* 점수 설정 섹션 */}
               <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-3 sm:p-4 md:p-6 lg:p-8 rounded-xl sm:rounded-2xl border-2 border-blue-200 mb-4 sm:mb-6 md:mb-8">
                 <h3 className="text-lg sm:text-xl md:text-2xl font-bold text-gray-800 mb-3 sm:mb-4 md:mb-6">🏆 포인트를 받을 아이를 선택하세요</h3>
-                
-                {/* 아이 선택 그리드 */}
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-2 sm:gap-3 md:gap-4 mb-4 sm:mb-6 max-h-48 sm:max-h-56 md:max-h-64 overflow-y-auto">
-                  {children.length === 0 ? (
-                    <div className="col-span-full text-center py-8 text-gray-500">
-                      등록된 아이가 없습니다
-                    </div>
-                  ) : (
-                    children
-                      .sort((a, b) => b.points - a.points)
-                      .map((child) => (
+
+                {/* 전체 선택 / 선택 해제 버튼 */}
+                {(() => {
+                  // 팀 모드일 때는 해당 팀 아이들만, 반 모드일 때는 전체
+                  const displayChildren = gameMode === 'team' && selectedTeams.length > 0
+                    ? children.filter(c => c.className && selectedTeams.includes(c.className))
+                    : children;
+                  const allSelected = displayChildren.length > 0 && displayChildren.every(c => selectedChildIds.includes(c.qrId));
+
+                  return (
+                    <>
+                      <div className="flex gap-2 mb-3">
                         <button
-                          key={child.qrId}
-                          onClick={() => setSelectedChildId(child.qrId)}
-                          className={`p-4 rounded-xl border-2 transition-all hover:scale-105 ${
-                            selectedChildId === child.qrId
-                              ? 'bg-blue-500 text-white border-blue-600 shadow-lg'
-                              : 'bg-white text-gray-800 border-gray-200 hover:border-blue-300'
+                          onClick={() => {
+                            if (allSelected) {
+                              setSelectedChildIds([]);
+                            } else {
+                              setSelectedChildIds(displayChildren.map(c => c.qrId));
+                            }
+                          }}
+                          className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
+                            allSelected
+                              ? 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                              : 'bg-blue-500 text-white hover:bg-blue-600'
                           }`}
                         >
-                          <p className="font-bold text-lg">{child.name}</p>
-                          <p className={`text-sm ${
-                            selectedChildId === child.qrId ? 'text-blue-100' : 'text-gray-500'
-                          }`}>{child.age}</p>
-                          <p className={`font-semibold mt-1 ${
-                            selectedChildId === child.qrId ? 'text-white' : 'text-green-600'
-                          }`}>{child.points}점</p>
+                          {allSelected ? '✓ 전체 해제' : '☑️ 전체 선택'}
                         </button>
-                      ))
-                  )}
-                </div>
+                        {selectedChildIds.length > 0 && (
+                          <span className="px-3 py-2 bg-green-100 text-green-700 rounded-lg text-sm font-medium">
+                            {selectedChildIds.length}명 선택됨
+                          </span>
+                        )}
+                      </div>
+
+                      {/* 아이 선택 그리드 */}
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-2 sm:gap-3 md:gap-4 mb-4 sm:mb-6 max-h-48 sm:max-h-56 md:max-h-64 overflow-y-auto">
+                        {displayChildren.length === 0 ? (
+                          <div className="col-span-full text-center py-8 text-gray-500">
+                            {gameMode === 'team' ? '선택된 팀에 등록된 아이가 없습니다' : '등록된 아이가 없습니다'}
+                          </div>
+                        ) : (
+                          displayChildren
+                            .sort((a, b) => b.points - a.points)
+                            .map((child) => {
+                              const isSelected = selectedChildIds.includes(child.qrId);
+                              return (
+                                <button
+                                  key={child.qrId}
+                                  onClick={() => {
+                                    setSelectedChildIds(prev =>
+                                      isSelected
+                                        ? prev.filter(id => id !== child.qrId)
+                                        : [...prev, child.qrId]
+                                    );
+                                  }}
+                                  className={`p-4 rounded-xl border-2 transition-all hover:scale-105 relative ${
+                                    isSelected
+                                      ? 'bg-blue-500 text-white border-blue-600 shadow-lg'
+                                      : 'bg-white text-gray-800 border-gray-200 hover:border-blue-300'
+                                  }`}
+                                >
+                                  {isSelected && (
+                                    <div className="absolute top-2 right-2 w-5 h-5 bg-white rounded-full flex items-center justify-center">
+                                      <span className="text-blue-500 text-sm">✓</span>
+                                    </div>
+                                  )}
+                                  <p className="font-bold text-lg">{child.name}</p>
+                                  <p className={`text-sm ${
+                                    isSelected ? 'text-blue-100' : 'text-gray-500'
+                                  }`}>{child.age}</p>
+                                  <p className={`font-semibold mt-1 ${
+                                    isSelected ? 'text-white' : 'text-green-600'
+                                  }`}>{child.points}점</p>
+                                </button>
+                              );
+                            })
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
 
                 {/* 포인트 입력 */}
                 <div className="mb-4 sm:mb-6">
@@ -768,16 +1247,17 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
                 <Button
                   onClick={async () => {
                     await addPoints();
-                    setSelectedChildId('');
+                    const count = selectedChildIds.length;
+                    setSelectedChildIds([]);
                     setPoints(10);
-                    alert('포인트가 추가되었습니다! 🎉');
+                    alert(`${count}명에게 포인트가 추가되었습니다! 🎉`);
                   }}
-                  disabled={!selectedChildId}
+                  disabled={selectedChildIds.length === 0}
                   size="lg"
                   className="w-full h-12 sm:h-14 md:h-16 text-base sm:text-lg md:text-xl bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Plus className="mr-2 size-4 sm:size-5 md:size-6" />
-                  포인트 추가하기
+                  {selectedChildIds.length > 0 ? `${selectedChildIds.length}명에게 포인트 추가하기` : '포인트 추가하기'}
                 </Button>
               </div>
               
@@ -862,9 +1342,9 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
       <div className="flex-1 flex flex-col relative z-10 overflow-hidden">
         {/* Header */}
         <div className="bg-white/90 backdrop-blur-sm shadow-xl px-4 py-2 flex justify-between items-center border-b-2 border-purple-200 flex-shrink-0">
-          <Button 
-            onClick={() => setSelectedGame(null)} 
-            variant="ghost" 
+          <Button
+            onClick={() => setSelectedGame(null)}
+            variant="ghost"
             size="sm"
             className="hover:bg-purple-100 text-sm font-medium flex-shrink-0"
           >
@@ -879,10 +1359,29 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
               문제 {currentIndex + 1} / {items.length}
             </p>
           </div>
+
+          {/* 점수 표시 */}
+          <div className="flex items-center gap-3 mr-2">
+            <div className="text-center">
+              <p className="text-xs text-gray-500">{gameMode === 'class' ? '반 점수' : '팀 점수'}</p>
+              <p className="font-bold text-lg text-yellow-600">
+                {gameMode === 'class'
+                  ? classScore
+                  : Object.values(teamScores).reduce((a, b) => a + b, 0)
+                }점
+              </p>
+            </div>
+            <div className="text-center text-xs">
+              <span className="text-green-600">✓{correctCount}</span>
+              <span className="text-gray-400 mx-1">/</span>
+              <span className="text-red-500">✗{wrongCount}</span>
+            </div>
+          </div>
+
           {/* 진행 바 */}
-          <div className="w-32 md:w-48">
+          <div className="w-24 md:w-32">
             <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-              <div 
+              <div
                 className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all duration-500 ease-out"
                 style={{ width: `${((currentIndex + 1) / items.length) * 100}%` }}
               />
@@ -903,16 +1402,21 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
                   <h2 className="text-xl md:text-2xl font-bold mb-4 bg-gradient-to-r from-green-600 to-blue-600 bg-clip-text text-transparent leading-tight px-2">
                     {currentItem.question}
                   </h2>
-                  
+
                   {/* 사지선다 선택지 */}
                   <div className="grid grid-cols-2 gap-2 md:gap-3 max-w-3xl mx-auto mb-3">
                     {currentItem.options && currentItem.options.map((option: string, index: number) => (
                       <button
                         key={index}
-                        onClick={() => setShowAnswer(true)}
+                        onClick={() => handleClassificationAnswer(index)}
+                        disabled={showAnswer}
                         className={`group relative overflow-hidden p-3 md:p-4 rounded-xl transition-all hover:scale-105 active:scale-95 border-2 border-white shadow-lg ${
-                          showAnswer && index === currentItem.answer
-                            ? 'bg-gradient-to-br from-green-400 to-emerald-500'
+                          showAnswer
+                            ? index === currentItem.answer
+                              ? 'bg-gradient-to-br from-green-400 to-emerald-500' // 정답 표시
+                              : selectedOption === index
+                                ? 'bg-gradient-to-br from-red-400 to-red-500' // 선택한 오답
+                                : 'bg-gradient-to-br from-gray-300 to-gray-400 opacity-60' // 나머지
                             : 'bg-gradient-to-br from-blue-400 to-purple-500 hover:from-blue-500 hover:to-purple-600'
                         }`}
                       >
@@ -928,17 +1432,36 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
                         {showAnswer && index === currentItem.answer && (
                           <div className="absolute top-1 right-1 text-xl md:text-2xl">✓</div>
                         )}
+                        {showAnswer && selectedOption === index && index !== currentItem.answer && (
+                          <div className="absolute top-1 right-1 text-xl md:text-2xl">✗</div>
+                        )}
                       </button>
                     ))}
                   </div>
 
+                  {/* 정답/오답 피드백 */}
                   {showAnswer && currentItem.options && (
-                    <div className="bg-gradient-to-r from-green-400 to-emerald-400 p-3 md:p-4 rounded-xl border-2 border-white shadow-lg animate-slide-up">
-                      <p className="text-lg md:text-xl font-bold text-white drop-shadow-lg mb-1">
-                        ✅ 정답: {currentItem.options[currentItem.answer]}
-                      </p>
-                      <p className="text-xs md:text-sm text-white/90 drop-shadow">
-                        2초 후 자동으로 다음 문제로 넘어갑니다...
+                    <div className={`p-3 md:p-4 rounded-xl border-2 border-white shadow-lg animate-slide-up ${
+                      isCorrect
+                        ? 'bg-gradient-to-r from-green-400 to-emerald-400'
+                        : 'bg-gradient-to-r from-orange-400 to-red-400'
+                    }`}>
+                      {isCorrect ? (
+                        <p className="text-lg md:text-xl font-bold text-white drop-shadow-lg mb-1">
+                          🎉 정답이에요! +5점
+                        </p>
+                      ) : (
+                        <>
+                          <p className="text-lg md:text-xl font-bold text-white drop-shadow-lg mb-1">
+                            😢 아쉬워요!
+                          </p>
+                          <p className="text-sm md:text-base text-white drop-shadow-lg">
+                            정답: {currentItem.options[currentItem.answer]}
+                          </p>
+                        </>
+                      )}
+                      <p className="text-xs md:text-sm text-white/90 drop-shadow mt-1">
+                        잠시 후 다음 문제로 넘어갑니다...
                       </p>
                     </div>
                   )}
@@ -957,44 +1480,85 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
                   <p className="text-base md:text-lg text-gray-700 mb-4 font-semibold px-2">
                     {difficulty === 'easy' ? '맞는 이야기일까요? 🤔' : '올바른 설명일까요? 🤔'}
                   </p>
-                  
+
                   {/* OX 버튼 */}
                   <div className="grid grid-cols-2 gap-3 max-w-xl mx-auto mb-3">
                     <button
-                      onClick={() => setShowAnswer(true)}
-                      className="group relative overflow-hidden flex flex-col items-center gap-2 p-4 md:p-6 rounded-xl transition-all hover:scale-105 active:scale-95 bg-gradient-to-br from-blue-400 to-blue-600 border-2 border-white shadow-lg hover:shadow-xl"
+                      onClick={() => handleOXAnswer(true)}
+                      disabled={showAnswer}
+                      className={`group relative overflow-hidden flex flex-col items-center gap-2 p-4 md:p-6 rounded-xl transition-all hover:scale-105 active:scale-95 border-2 border-white shadow-lg hover:shadow-xl ${
+                        showAnswer
+                          ? currentItem.answer === true
+                            ? 'bg-gradient-to-br from-green-400 to-green-600' // 정답
+                            : selectedOption === true
+                              ? 'bg-gradient-to-br from-red-400 to-red-600' // 선택한 오답
+                              : 'bg-gradient-to-br from-gray-300 to-gray-400 opacity-60'
+                          : 'bg-gradient-to-br from-blue-400 to-blue-600'
+                      }`}
                     >
                       <div className="absolute inset-0 bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity" />
                       <Check className="size-12 md:size-16 text-white drop-shadow-lg relative z-10" strokeWidth={3} />
                       <span className="text-2xl md:text-3xl font-bold text-white drop-shadow-lg relative z-10">O</span>
+                      {showAnswer && currentItem.answer === true && (
+                        <span className="absolute top-1 right-2 text-xl">✓</span>
+                      )}
+                      {showAnswer && selectedOption === true && currentItem.answer !== true && (
+                        <span className="absolute top-1 right-2 text-xl">✗</span>
+                      )}
                     </button>
                     <button
-                      onClick={() => setShowAnswer(true)}
-                      className="group relative overflow-hidden flex flex-col items-center gap-2 p-4 md:p-6 rounded-xl transition-all hover:scale-105 active:scale-95 bg-gradient-to-br from-orange-400 to-red-500 border-2 border-white shadow-lg hover:shadow-xl"
+                      onClick={() => handleOXAnswer(false)}
+                      disabled={showAnswer}
+                      className={`group relative overflow-hidden flex flex-col items-center gap-2 p-4 md:p-6 rounded-xl transition-all hover:scale-105 active:scale-95 border-2 border-white shadow-lg hover:shadow-xl ${
+                        showAnswer
+                          ? currentItem.answer === false
+                            ? 'bg-gradient-to-br from-green-400 to-green-600' // 정답
+                            : selectedOption === false
+                              ? 'bg-gradient-to-br from-red-400 to-red-600' // 선택한 오답
+                              : 'bg-gradient-to-br from-gray-300 to-gray-400 opacity-60'
+                          : 'bg-gradient-to-br from-orange-400 to-red-500'
+                      }`}
                     >
                       <div className="absolute inset-0 bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity" />
                       <X className="size-12 md:size-16 text-white drop-shadow-lg relative z-10" strokeWidth={3} />
                       <span className="text-2xl md:text-3xl font-bold text-white drop-shadow-lg relative z-10">X</span>
+                      {showAnswer && currentItem.answer === false && (
+                        <span className="absolute top-1 right-2 text-xl">✓</span>
+                      )}
+                      {showAnswer && selectedOption === false && currentItem.answer !== false && (
+                        <span className="absolute top-1 right-2 text-xl">✗</span>
+                      )}
                     </button>
                   </div>
 
-                  {/* 정답 표시 */}
+                  {/* 정답/오답 피드백 */}
                   {showAnswer && (
                     <div
                       className={`p-3 md:p-4 rounded-xl border-2 border-white shadow-lg mx-auto max-w-md animate-slide-up ${
-                        currentItem.answer 
-                          ? 'bg-gradient-to-br from-blue-400 to-blue-600' 
+                        isCorrect
+                          ? 'bg-gradient-to-br from-green-400 to-emerald-500'
                           : 'bg-gradient-to-br from-orange-400 to-red-500'
                       }`}
                     >
-                      <p className="text-xl md:text-2xl font-bold text-white drop-shadow-lg">
-                        ✨ 정답: {currentItem.answer ? 'O' : 'X'}
-                      </p>
+                      {isCorrect ? (
+                        <p className="text-xl md:text-2xl font-bold text-white drop-shadow-lg">
+                          🎉 정답이에요! +5점
+                        </p>
+                      ) : (
+                        <>
+                          <p className="text-xl md:text-2xl font-bold text-white drop-shadow-lg">
+                            😢 아쉬워요!
+                          </p>
+                          <p className="text-sm md:text-base text-white drop-shadow-lg mt-1">
+                            정답은 {currentItem.answer ? 'O' : 'X'}예요
+                          </p>
+                        </>
+                      )}
                       <p className="text-sm md:text-base text-white drop-shadow-lg mt-1 mb-1">
                         {currentItem.reason}
                       </p>
                       <p className="text-xs md:text-sm text-white/90 drop-shadow">
-                        2초 후 자동으로 다음 문제로 넘어갑니다...
+                        잠시 후 다음 문제로 넘어갑니다...
                       </p>
                     </div>
                   )}
@@ -1010,14 +1574,19 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
                   <h2 className="text-xl md:text-2xl font-bold mb-4 bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent leading-tight px-2">
                     {currentItem.question}
                   </h2>
-                  
+
                   {/* A/B 선택지 */}
                   <div className="grid grid-cols-2 gap-3 max-w-3xl mx-auto mb-3">
                     <button
-                      onClick={() => setShowAnswer(true)}
+                      onClick={() => handleCardAnswer('A')}
+                      disabled={showAnswer}
                       className={`group relative overflow-hidden p-4 md:p-6 rounded-xl transition-all hover:scale-105 active:scale-95 border-2 border-white shadow-lg ${
-                        showAnswer && currentItem.answer === 'A'
-                          ? 'bg-gradient-to-br from-green-400 to-emerald-500'
+                        showAnswer
+                          ? currentItem.answer === 'A'
+                            ? 'bg-gradient-to-br from-green-400 to-emerald-500'
+                            : selectedOption === 'A'
+                              ? 'bg-gradient-to-br from-red-400 to-red-500'
+                              : 'bg-gradient-to-br from-gray-300 to-gray-400 opacity-60'
                           : 'bg-gradient-to-br from-purple-400 to-pink-500 hover:from-purple-500 hover:to-pink-600'
                       }`}
                     >
@@ -1031,13 +1600,21 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
                       {showAnswer && currentItem.answer === 'A' && (
                         <div className="absolute top-2 right-2 text-2xl md:text-3xl">✓</div>
                       )}
+                      {showAnswer && selectedOption === 'A' && currentItem.answer !== 'A' && (
+                        <div className="absolute top-2 right-2 text-2xl md:text-3xl">✗</div>
+                      )}
                     </button>
-                    
+
                     <button
-                      onClick={() => setShowAnswer(true)}
+                      onClick={() => handleCardAnswer('B')}
+                      disabled={showAnswer}
                       className={`group relative overflow-hidden p-4 md:p-6 rounded-xl transition-all hover:scale-105 active:scale-95 border-2 border-white shadow-lg ${
-                        showAnswer && currentItem.answer === 'B'
-                          ? 'bg-gradient-to-br from-green-400 to-emerald-500'
+                        showAnswer
+                          ? currentItem.answer === 'B'
+                            ? 'bg-gradient-to-br from-green-400 to-emerald-500'
+                            : selectedOption === 'B'
+                              ? 'bg-gradient-to-br from-red-400 to-red-500'
+                              : 'bg-gradient-to-br from-gray-300 to-gray-400 opacity-60'
                           : 'bg-gradient-to-br from-purple-400 to-pink-500 hover:from-purple-500 hover:to-pink-600'
                       }`}
                     >
@@ -1051,16 +1628,35 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
                       {showAnswer && currentItem.answer === 'B' && (
                         <div className="absolute top-2 right-2 text-2xl md:text-3xl">✓</div>
                       )}
+                      {showAnswer && selectedOption === 'B' && currentItem.answer !== 'B' && (
+                        <div className="absolute top-2 right-2 text-2xl md:text-3xl">✗</div>
+                      )}
                     </button>
                   </div>
 
+                  {/* 정답/오답 피드백 */}
                   {showAnswer && (
-                    <div className="bg-gradient-to-r from-green-400 to-emerald-400 p-3 md:p-4 rounded-xl border-2 border-white shadow-lg animate-slide-up">
-                      <p className="text-lg md:text-xl font-bold text-white drop-shadow-lg mb-1">
-                        ✅ 정답: {currentItem.answer === 'A' ? currentItem.optionA : currentItem.optionB}
-                      </p>
-                      <p className="text-xs md:text-sm text-white/90 drop-shadow">
-                        2초 후 자동으로 다음 문제로 넘어갑니다...
+                    <div className={`p-3 md:p-4 rounded-xl border-2 border-white shadow-lg animate-slide-up ${
+                      isCorrect
+                        ? 'bg-gradient-to-r from-green-400 to-emerald-400'
+                        : 'bg-gradient-to-r from-orange-400 to-red-400'
+                    }`}>
+                      {isCorrect ? (
+                        <p className="text-lg md:text-xl font-bold text-white drop-shadow-lg mb-1">
+                          🎉 정답이에요! +5점
+                        </p>
+                      ) : (
+                        <>
+                          <p className="text-lg md:text-xl font-bold text-white drop-shadow-lg mb-1">
+                            😢 아쉬워요!
+                          </p>
+                          <p className="text-sm md:text-base text-white drop-shadow-lg">
+                            정답: {currentItem.answer === 'A' ? currentItem.optionA : currentItem.optionB}
+                          </p>
+                        </>
+                      )}
+                      <p className="text-xs md:text-sm text-white/90 drop-shadow mt-1">
+                        잠시 후 다음 문제로 넘어갑니다...
                       </p>
                     </div>
                   )}
@@ -1147,20 +1743,48 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
                 />
               </div>
 
+              {/* 선택된 인원 표시 */}
+              {selectedChildIds.length > 0 && (
+                <p className="text-xs text-blue-600 font-medium">
+                  {selectedChildIds.length}명 선택됨
+                </p>
+              )}
+
               {/* Add Points Button */}
               <Button
-                onClick={addPoints}
+                onClick={async () => {
+                  await addPoints();
+                  const count = selectedChildIds.length;
+                  setSelectedChildIds([]);
+                  alert(`${count}명에게 포인트가 추가되었습니다! 🎉`);
+                }}
                 className="w-full bg-green-500 hover:bg-green-600 h-8 text-sm"
-                disabled={!selectedChildId}
+                disabled={selectedChildIds.length === 0}
               >
                 <Plus className="mr-1 size-4" />
-                포인트 추가
+                {selectedChildIds.length > 0 ? `${selectedChildIds.length}명에게 추가` : '포인트 추가'}
               </Button>
             </div>
 
             {/* Children List */}
             <div className="flex-1 overflow-y-auto p-3">
-              <h4 className="font-semibold text-sm mb-2">아이 선택</h4>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="font-semibold text-sm">아이 선택</h4>
+                {/* 전체 선택 버튼 */}
+                <button
+                  onClick={() => {
+                    const allSelected = children.length > 0 && children.every(c => selectedChildIds.includes(c.qrId));
+                    if (allSelected) {
+                      setSelectedChildIds([]);
+                    } else {
+                      setSelectedChildIds(children.map(c => c.qrId));
+                    }
+                  }}
+                  className="text-xs text-blue-500 hover:text-blue-700"
+                >
+                  {children.length > 0 && children.every(c => selectedChildIds.includes(c.qrId)) ? '전체 해제' : '전체 선택'}
+                </button>
+              </div>
               <div className="space-y-1.5">
                 {children.length === 0 ? (
                   <p className="text-xs text-gray-500 text-center py-3">
@@ -1169,32 +1793,43 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
                 ) : (
                   children
                     .sort((a, b) => b.points - a.points)
-                    .map((child, index) => (
-                      <Card
-                        key={child.qrId}
-                        className={`p-2 cursor-pointer transition-all ${
-                          selectedChildId === child.qrId
-                            ? 'bg-blue-50 border-2 border-blue-500'
-                            : 'hover:bg-gray-50'
-                        }`}
-                        onClick={() => setSelectedChildId(child.qrId)}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <div className="flex items-center justify-center w-5 h-5 rounded-full bg-gray-200 text-xs font-bold">
-                              {index + 1}
+                    .map((child, index) => {
+                      const isSelected = selectedChildIds.includes(child.qrId);
+                      return (
+                        <Card
+                          key={child.qrId}
+                          className={`p-2 cursor-pointer transition-all ${
+                            isSelected
+                              ? 'bg-blue-50 border-2 border-blue-500'
+                              : 'hover:bg-gray-50'
+                          }`}
+                          onClick={() => {
+                            setSelectedChildIds(prev =>
+                              isSelected
+                                ? prev.filter(id => id !== child.qrId)
+                                : [...prev, child.qrId]
+                            );
+                          }}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <div className={`flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold ${
+                                isSelected ? 'bg-blue-500 text-white' : 'bg-gray-200'
+                              }`}>
+                                {isSelected ? '✓' : index + 1}
+                              </div>
+                              <div>
+                                <p className="font-semibold text-xs">{child.name}</p>
+                                <p className="text-[10px] text-gray-500">{child.age}</p>
+                              </div>
                             </div>
-                            <div>
-                              <p className="font-semibold text-xs">{child.name}</p>
-                              <p className="text-[10px] text-gray-500">{child.age}</p>
+                            <div className="text-right">
+                              <p className="font-bold text-xs text-green-600">{child.points}점</p>
                             </div>
                           </div>
-                          <div className="text-right">
-                            <p className="font-bold text-xs text-green-600">{child.points}점</p>
-                          </div>
-                        </div>
-                      </Card>
-                    ))
+                        </Card>
+                      );
+                    })
                 )}
               </div>
             </div>

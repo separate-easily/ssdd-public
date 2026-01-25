@@ -125,3 +125,47 @@ export const VOICE_MESSAGES = {
   showTrash: '쓰레기를 카메라에 보여줘!',
   tryAgain: '다시 해볼까?',
 } as const;
+
+// ============================================================
+// Phase별 TTS 음성 메시지 (CameraGamePhase용)
+// ============================================================
+
+/**
+ * 카메라 게임 Phase별 음성 메시지
+ *
+ * 요구사항에 맞춰 각 Phase에서 TTS로 안내할 문구를 정의합니다.
+ */
+export const PHASE_VOICE_MESSAGES = {
+  // QR 인식 관련
+  WAIT_FOR_QR: '카메라에 카드가 잘 보이게 보여주세요!',
+  QR_RECOGNIZING: '카드를 읽고 있어요. 잠시만 기다려 주세요!',
+
+  // 아이 인사
+  greetChild: (nickname: string) =>
+    `${nickname} 친구 반가워요! 오늘도 지구와 평택시를 지켜볼까요?`,
+
+  // 쓰레기 인식 관련
+  WAIT_FOR_TRASH: '이제 버릴 쓰레기를 화면에 잘 보이게 보여주세요!',
+  WAIT_FOR_TRASH_RETRY:
+    '쓰레기를 조금 더 가까이 가져와 주세요. 잘 안되면 선생님을 불러 주세요!',
+  TRASH_RECOGNIZING: '이 쓰레기를 어디로 보내야 할지 생각해 보는 중이에요!',
+
+  // 분리배출통 선택
+  WAIT_FOR_BIN_CHOICE:
+    '이제 우리 반 쓰레기통으로 가서, 어디에 버릴지 생각해 보아요!',
+
+  // 피드백
+  feedbackCorrect: (nickname?: string) =>
+    nickname
+      ? `와우! ${nickname} 친구 멋져요! 덕분에 평택시가 더 깨끗해졌어요!`
+      : '와우! 멋져요! 덕분에 평택시가 더 깨끗해졌어요!',
+  feedbackWrong:
+    '아쉬워요! 우리 버리려던 쓰레기가 어떻게 생겼는지 한 번 보고 만져볼까요? 딱딱한지, 말랑한지, 투명한지 선생님과 이야기해 보세요!',
+
+  // 라운드 종료
+  SUMMARY_COOLDOWN:
+    '오늘도 지구를 지키느라 수고했어요! 다음 친구를 위해 자리를 양보해 줄까요?',
+
+  // QR OFF 모드 (반 전체 모드)
+  classMode: '우리 반 전체가 함께하는 분리배출 시간이에요!',
+} as const;

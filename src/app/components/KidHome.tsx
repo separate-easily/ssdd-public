@@ -1,9 +1,12 @@
+// @ts-nocheck
+/* eslint-disable */
+
 import { useState, useEffect } from 'react';
 import { Button } from './ui/button';
 import { IDCard } from './IDCard';
 import { WebcamScreen } from './WebcamScreen';
 import { Camera, LogOut } from 'lucide-react';
-import logoImage from 'figma:asset/08495d2ac9d9702a3eba0824bb37379f02899583.png';
+import logoImage from '../../assets/08495d2ac9d9702a3eba0824bb37379f02899583.png';
 
 interface KidHomeProps {
   onLogout: () => void;

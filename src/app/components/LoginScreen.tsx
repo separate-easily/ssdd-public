@@ -1,26 +1,18 @@
 // @ts-nocheck
 /* eslint-disable */
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Input } from './ui/input';
 import { Checkbox } from './ui/checkbox';
 import { Label } from './ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
-import logoImage from 'figma:asset/08495d2ac9d9702a3eba0824bb37379f02899583.png';
-import { auth } from '../../utils/firebase/config';
-import { 
-  signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword, 
-  updateProfile,
-  sendPasswordResetEmail,
-  deleteUser
-} from 'firebase/auth';
-import { projectId, publicAnonKey } from '../../../utils/supabase/info';
+import logoImage from '../../assets/08495d2ac9d9702a3eba0824bb37379f02899583.png';
+import { publicAnonKey, SUPABASE_FUNCTIONS_BASE_URL } from '../../../utils/supabase/info';
 
 // Supabase Configuration
-const SUPABASE_URL = `https://${projectId}.supabase.co/functions/v1/make-server-edd517d1`;
+const SUPABASE_URL = SUPABASE_FUNCTIONS_BASE_URL;
 
 // Terms content
 const PRIVACY_TERM = `개인정보 수집 및 이용 동의
@@ -68,10 +60,10 @@ interface LoginScreenProps {
 }
 
 export function LoginScreen({ onManualLogin }: LoginScreenProps) {
-  const [loginId, setLoginId] = useState(''); // 이메일 대신 아이디 사용
+  const [loginId, setLoginId] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  
+
   // 회원가입 상태
   const [showSignup, setShowSignup] = useState(false);
   const [signupInstitutionName, setSignupInstitutionName] = useState('');
@@ -79,28 +71,22 @@ export function LoginScreen({ onManualLogin }: LoginScreenProps) {
   const [signupEmail, setSignupEmail] = useState('');
   const [signupPassword, setSignupPassword] = useState('');
   const [signupConfirmPassword, setSignupConfirmPassword] = useState('');
-  
+
   // 약관 동의 상태
   const [agreePrivacy, setAgreePrivacy] = useState(false);
   const [agreeCamera, setAgreeCamera] = useState(false);
-  
+
   // 약관 상세 보기 상태
   const [showPrivacyTerm, setShowPrivacyTerm] = useState(false);
   const [showCameraTerm, setShowCameraTerm] = useState(false);
-  
+
   // 비밀번호 찾기 상태
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [resetEmail, setResetEmail] = useState('');
 
-  // Firebase 설정 확인
-  const isFirebaseValid = auth.app.options.apiKey && auth.app.options.apiKey !== "YOUR_API_KEY";
-
-  useEffect(() => {
-    if (!isFirebaseValid) {
-      console.log("Firebase API Key is missing. Fallback mode enabled.");
-    }
-  }, [isFirebaseValid]);
-
+  /**
+   * 로그인 핸들러 - Supabase Edge Function만 사용
+   */
   const handleLogin = async () => {
     if (!loginId.trim() || !password.trim()) {
       alert('아이디와 비밀번호를 입력해주세요.');
@@ -110,7 +96,7 @@ export function LoginScreen({ onManualLogin }: LoginScreenProps) {
     setIsLoading(true);
     try {
       // 1. 아이디로 이메일 조회
-      const response = await fetch(`${SUPABASE_URL}/auth/get-email-by-id`, {
+      const emailResponse = await fetch(`${SUPABASE_URL}/auth/get-email-by-id`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -119,8 +105,9 @@ export function LoginScreen({ onManualLogin }: LoginScreenProps) {
         body: JSON.stringify({ id: loginId }),
       });
 
-      if (!response.ok) {
-        if (response.status === 404) {
+      if (!emailResponse.ok) {
+        const status = emailResponse.status;
+        if (status === 404) {
           alert('존재하지 않는 아이디입니다.');
         } else {
           alert('로그인 시스템 오류가 발생했습니다. 관리자에게 문의하세요.');
@@ -129,75 +116,52 @@ export function LoginScreen({ onManualLogin }: LoginScreenProps) {
         return;
       }
 
-      const data = await response.json();
-      if (!data.success) {
-        alert(data.message || '존재하지 않는 아이디입니다.');
+      const emailData = await emailResponse.json();
+      if (!emailData.success) {
+        alert(emailData.message || '존재하지 않는 아이디입니다.');
         setIsLoading(false);
         return;
       }
 
-      const email = data.email;
+      const email = emailData.email;
 
-      // 2. 로그인 시도 (Firebase 또는 Fallback)
-      if (isFirebaseValid) {
-        try {
-          await signInWithEmailAndPassword(auth, email, password);
-        } catch (firebaseError: any) {
-          // Firebase 설정 문제나 기타 오류 시 Fallback 시도 여부 결정
-          if (firebaseError.code === 'auth/api-key-not-valid' || firebaseError.message?.includes('api-key')) {
-             await performFallbackLogin(email, password);
-          } else {
-            throw firebaseError;
-          }
-        }
-      } else {
-        // Firebase 키가 없으면 바로 Fallback 로그인
-        await performFallbackLogin(email, password);
+      // 2. Supabase Edge Function으로 로그인
+      const loginResponse = await fetch(`${SUPABASE_URL}/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${publicAnonKey}`,
+        },
+        body: JSON.stringify({ email, password }),
+      });
+
+      const loginData = await loginResponse.json();
+
+      if (!loginResponse.ok || !loginData.success) {
+        alert(loginData.message || '로그인에 실패했습니다.');
+        setIsLoading(false);
+        return;
       }
-      
+
+      // 3. 로그인 성공 - onManualLogin 호출
+      if (onManualLogin) {
+        onManualLogin({
+          uid: `supabase:${email}`,
+          email: email,
+          displayName: loginData.user?.name || loginId,
+        });
+      }
+
     } catch (error: any) {
       console.error('Login error:', error);
-      if (error.code === 'auth/wrong-password') {
-        alert('비밀번호가 일치하지 않습니다.');
-      } else if (error.code === 'auth/user-not-found') {
-        alert('존재하지 않는 계정입니다. (데이터 불일치)');
-      } else {
-        alert('로그인 중 오류가 발생했습니다.\n' + (error.message || ''));
-      }
+      alert('로그인 중 오류가 발생했습니다.\n' + (error.message || ''));
       setIsLoading(false);
     }
   };
 
-  const performFallbackLogin = async (email: string, password: string) => {
-    if (!onManualLogin) {
-      throw new Error("데모 모드 진입 불가 (핸들러 없음)");
-    }
-
-    // Supabase KV에서 유저 정보 확인
-    const kvAuthResponse = await fetch(`${SUPABASE_URL}/auth/login`, {
-       method: 'POST',
-       headers: {
-         'Content-Type': 'application/json',
-         'Authorization': `Bearer ${publicAnonKey}`,
-       },
-       body: JSON.stringify({ email, password }),
-    });
-    
-    const kvAuthData = await kvAuthResponse.json();
-    
-    if (kvAuthData.success) {
-      // alert('백업 시스템으로 로그인합니다.'); // 너무 자주 뜨면 귀찮으므로 제거 또는 토스트로 변경 고려
-      onManualLogin({
-        uid: `fallback:${email}`, // Use email for consistent UID in fallback mode
-        email: email,
-        displayName: kvAuthData.user.name,
-        isFallback: true
-      });
-    } else {
-      throw new Error(kvAuthData.message || '로그인 실패 (백업 인증)');
-    }
-  };
-
+  /**
+   * 회원가입 핸들러 - Supabase Edge Function만 사용
+   */
   const handleSignup = async () => {
     if (!signupInstitutionName.trim() || !signupId.trim() || !signupEmail.trim() || !signupPassword.trim()) {
       alert('모든 필드를 입력해주세요.');
@@ -230,7 +194,7 @@ export function LoginScreen({ onManualLogin }: LoginScreenProps) {
         },
         body: JSON.stringify({ id: signupId }),
       });
-      
+
       if (checkResponse.ok) {
         const checkData = await checkResponse.json();
         if (checkData.success) {
@@ -240,42 +204,25 @@ export function LoginScreen({ onManualLogin }: LoginScreenProps) {
         }
       }
 
-      // 2. 회원가입 시도
-      let isFallback = !isFirebaseValid;
-      let userCredential = null;
+      // 2. Supabase Edge Function으로 회원가입
+      const signupResponse = await fetch(`${SUPABASE_URL}/auth/signup`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${publicAnonKey}`,
+        },
+        body: JSON.stringify({
+          email: signupEmail,
+          password: signupPassword,
+          name: signupInstitutionName
+        }),
+      });
 
-      if (isFirebaseValid) {
-        try {
-          userCredential = await createUserWithEmailAndPassword(auth, signupEmail, signupPassword);
-        } catch (firebaseError: any) {
-          if (firebaseError.code === 'auth/api-key-not-valid' || firebaseError.message?.includes('api-key')) {
-            console.warn('Firebase API Key invalid during signup. Switching to fallback.');
-            isFallback = true;
-          } else {
-            throw firebaseError;
-          }
-        }
-      }
-
-      // Fallback 모드이거나 Firebase 실패 시 Supabase KV에 저장
-      if (isFallback) {
-        const kvSignupResponse = await fetch(`${SUPABASE_URL}/auth/signup`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${publicAnonKey}`,
-          },
-          body: JSON.stringify({ 
-            email: signupEmail, 
-            password: signupPassword,
-            name: signupInstitutionName 
-          }),
-        });
-        
-        const kvSignupData = await kvSignupResponse.json();
-        if (!kvSignupData.success) {
-          throw new Error(kvSignupData.message || '백업 회원가입 실패');
-        }
+      const signupData = await signupResponse.json();
+      if (!signupResponse.ok || !signupData.success) {
+        alert(signupData.message || '회원가입에 실패했습니다.');
+        setIsLoading(false);
+        return;
       }
 
       // 3. Supabase에 ID <-> 이메일 매핑 저장
@@ -289,10 +236,6 @@ export function LoginScreen({ onManualLogin }: LoginScreenProps) {
       });
 
       if (!mapResponse.ok) {
-        // 매핑 실패 시 롤백
-        if (!isFallback && userCredential) {
-          await deleteUser(userCredential.user);
-        }
         alert('아이디 등록 실패: 서버 통신 오류');
         setIsLoading(false);
         return;
@@ -300,71 +243,45 @@ export function LoginScreen({ onManualLogin }: LoginScreenProps) {
 
       const mapData = await mapResponse.json();
       if (!mapData.success) {
-        if (!isFallback && userCredential) {
-          await deleteUser(userCredential.user);
-        }
         alert('아이디 등록 실패: ' + mapData.message);
         setIsLoading(false);
         return;
       }
 
-      // 4. 프로필 업데이트 (Firebase인 경우만)
-      if (!isFallback && userCredential?.user) {
-        await updateProfile(userCredential.user, {
-          displayName: signupInstitutionName
+      // 4. 회원가입 성공 - 자동 로그인
+      alert('기관 회원가입이 완료되었습니다!\n자동으로 로그인됩니다.');
+
+      if (onManualLogin) {
+        onManualLogin({
+          uid: `supabase:${signupEmail}`,
+          email: signupEmail,
+          displayName: signupInstitutionName,
         });
       }
 
-      // 5. 로그인 처리
-      if (isFallback && onManualLogin) {
-        alert('회원가입 완료! (백업 모드)');
-        onManualLogin({
-          uid: `fallback:${signupEmail}`,
-          email: signupEmail,
-          displayName: signupInstitutionName,
-          isFallback: true
-        });
-      } else {
-        alert('기관 회원가입이 완료되었습니다!\n자동으로 로그인됩니다.');
-      }
-      
       setShowSignup(false);
 
     } catch (error: any) {
       console.error('Signup error:', error);
-      if (error.code === 'auth/email-already-in-use') {
-        alert('이미 등록된 이메일입니다.');
-      } else if (error.code === 'auth/invalid-email') {
-        alert('올바른 이메일 형식이 아닙니다.');
-      } else if (error.code === 'auth/weak-password') {
-        alert('비밀번호가 너무 약합니다. 6자 이상 입력해주세요.');
-      } else {
-        alert('회원가입 중 오류가 발생했습니다.\n' + (error.message || ''));
-      }
+      alert('회원가입 중 오류가 발생했습니다.\n' + (error.message || ''));
       setIsLoading(false);
     }
   };
 
+  /**
+   * 비밀번호 찾기 핸들러
+   * TODO: Supabase 기반 비밀번호 재설정 구현 필요
+   */
   const handleForgotPassword = async () => {
     if (!resetEmail.trim()) {
       alert('이메일을 입력해주세요.');
       return;
     }
 
-    if (!isFirebaseValid) {
-       alert('데모 모드에서는 비밀번호 찾기를 지원하지 않습니다.');
-       return;
-    }
-
-    try {
-      await sendPasswordResetEmail(auth, resetEmail);
-      alert('비밀번호 재설정 링크가 이메일로 전송되었습니다.');
-      setShowForgotPassword(false);
-      setResetEmail('');
-    } catch (error) {
-      console.error('Password Reset error:', error);
-      alert('비밀번호 재설정 중 오류가 발생했습니다.');
-    }
+    // TODO: Supabase Edge Function으로 비밀번호 재설정 이메일 발송 구현
+    alert('비밀번호 재설정 기능은 현재 준비 중입니다.\n관리자에게 문의해주세요.');
+    setShowForgotPassword(false);
+    setResetEmail('');
   };
 
   return (
@@ -379,9 +296,9 @@ export function LoginScreen({ onManualLogin }: LoginScreenProps) {
       <Card className="w-full max-w-md shadow-2xl border-0 bg-white/95 backdrop-blur-sm relative z-10 animate-scale-in">
         <CardHeader className="text-center pb-3 sm:pb-4 pt-4 sm:pt-6 px-4 sm:px-6">
           <div className="flex justify-center mb-3 sm:mb-4">
-            <img 
-              src={logoImage} 
-              alt="쏙쏙분리 똑똑분리 로고" 
+            <img
+              src={logoImage}
+              alt="쏙쏙분리 똑똑분리 로고"
               className="h-16 sm:h-20 md:h-24 w-auto animate-slide-up"
             />
           </div>
@@ -519,8 +436,8 @@ export function LoginScreen({ onManualLogin }: LoginScreenProps) {
 
             <div className="space-y-3 py-2 bg-gray-50 p-4 rounded-xl border border-gray-100">
               <div className="flex items-start space-x-2">
-                <Checkbox 
-                  id="terms1" 
+                <Checkbox
+                  id="terms1"
                   checked={agreePrivacy}
                   onCheckedChange={(checked) => setAgreePrivacy(checked as boolean)}
                   className="mt-0.5"
@@ -529,7 +446,7 @@ export function LoginScreen({ onManualLogin }: LoginScreenProps) {
                   <Label htmlFor="terms1" className="text-sm text-gray-600 font-medium peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer">
                     [필수] 개인정보 수집 및 이용 동의
                   </Label>
-                  <button 
+                  <button
                     onClick={() => setShowPrivacyTerm(true)}
                     className="text-xs text-gray-400 hover:text-green-600 underline text-left w-fit"
                   >
@@ -538,8 +455,8 @@ export function LoginScreen({ onManualLogin }: LoginScreenProps) {
                 </div>
               </div>
               <div className="flex items-start space-x-2">
-                <Checkbox 
-                  id="terms2" 
+                <Checkbox
+                  id="terms2"
                   checked={agreeCamera}
                   onCheckedChange={(checked) => setAgreeCamera(checked as boolean)}
                   className="mt-0.5"
@@ -548,7 +465,7 @@ export function LoginScreen({ onManualLogin }: LoginScreenProps) {
                   <Label htmlFor="terms2" className="text-sm text-gray-600 font-medium peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer">
                     [필수] 카메라 접근 및 초상권 사용 동의
                   </Label>
-                  <button 
+                  <button
                     onClick={() => setShowCameraTerm(true)}
                     className="text-xs text-gray-400 hover:text-green-600 underline text-left w-fit"
                   >

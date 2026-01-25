@@ -32,8 +32,8 @@ export interface FakeYoloResult {
 // 상수
 // ============================================================
 
-/** 가능한 카테고리 목록 */
-const CATEGORIES: MissionCategory[] = ['plastic', 'paper', 'can', 'general'];
+/** 가능한 카테고리 목록 (5종류 - RecycleBinType과 일치) */
+const CATEGORIES: MissionCategory[] = ['plastic', 'paper', 'vinyl', 'general', 'canBotble'];
 
 /** 최소 분석 딜레이 (ms) */
 const MIN_DELAY_MS = 800;

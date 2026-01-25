@@ -27,11 +27,11 @@ import { Input } from './ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from './ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { LogOut, Users, Gamepad2, Trophy, Plus, Download, QrCode, Trash2, RefreshCw, X, Loader2, UserCircle, Lock, Key, ChevronLeft, ChevronRight, ArrowLeft } from 'lucide-react';
-import { GameScreen } from './GameScreen.broken';
+import { GameScreen } from './GameScreen';
 import { RankingScreen, RankingUser } from './RankingScreen';
 import QRCodeLib from 'qrcode';
 import { Html5Qrcode } from "html5-qrcode";
-import logoImage from 'figma:asset/08495d2ac9d9702a3eba0824bb37379f02899583.png';
+import logoImage from '../../assets/08495d2ac9d9702a3eba0824bb37379f02899583.png';
 import { toPng } from 'html-to-image';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
@@ -40,7 +40,9 @@ import { updatePassword, reauthenticateWithCredential, EmailAuthProvider, delete
 import Slider from "react-slick";
 import "slick-carousel/slick/slick.css";
 import "slick-carousel/slick/slick-theme.css";
-import { projectId, publicAnonKey } from '../../../utils/supabase/info';
+import { projectId, publicAnonKey, SUPABASE_FUNCTIONS_BASE_URL } from '../../../utils/supabase/info';
+import { ChildDetailModal } from '../../components/ChildDetailModal';
+// DEMO_MODE 제거됨 - Supabase만 사용
 
 // Custom Arrow Components for Slider
 const NextArrow = ({ onClick, className, style }: any) => (
@@ -146,9 +148,10 @@ interface Institution {
 interface Child {
   qrId: string;
   name: string;
-  age: string; 
+  age: string;
   points: number;
   team?: string; // 팀 정보 추가
+  className?: string; // 소속 반
 }
 
 export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
@@ -156,6 +159,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
   const [selectedInstitution, setSelectedInstitution] = useState<Institution | null>(null);
   const [children, setChildren] = useState<Child[]>([]);
   const [allChildren, setAllChildren] = useState<RankingUser[]>([]); // For Institution Ranking
+  const [childrenLoadError, setChildrenLoadError] = useState<boolean>(false); // 서버 연결 실패 시 true
   
   // Team Management States
   const [teams, setTeams] = useState<string[]>([]);
@@ -199,6 +203,10 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
   // Export Stage State (Single Card Rendering for Performance)
   const [exportTargetCardId, setExportTargetCardId] = useState<string | null>(null);
 
+  // Child Detail Modal States
+  const [selectedChildForDetail, setSelectedChildForDetail] = useState<Child | null>(null);
+  const [showChildDetailModal, setShowChildDetailModal] = useState(false);
+
   useEffect(() => {
     if (user?.uid) {
       loadInstitutions();
@@ -221,7 +229,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
   const loadInstitutions = async () => {
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-edd517d1/institution/list`,
+        `${SUPABASE_FUNCTIONS_BASE_URL}/institution/list`,
         {
           method: 'POST',
           headers: {
@@ -243,7 +251,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
   const loadTeams = async (institutionId: string) => {
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-edd517d1/institution/teams/list`,
+        `${SUPABASE_FUNCTIONS_BASE_URL}/institution/teams/list`,
         {
           method: 'POST',
           headers: {
@@ -270,17 +278,17 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
     }
 
     const updatedTeams = [...teams, newTeamName.trim()];
-    
+
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-edd517d1/institution/teams/update`,
+        `${SUPABASE_FUNCTIONS_BASE_URL}/institution/teams/update`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${publicAnonKey}`,
           },
-          body: JSON.stringify({ 
+          body: JSON.stringify({
             institutionId: selectedInstitution.id,
             teams: updatedTeams
           }),
@@ -305,14 +313,14 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
 
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-edd517d1/institution/teams/update`,
+        `${SUPABASE_FUNCTIONS_BASE_URL}/institution/teams/update`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${publicAnonKey}`,
           },
-          body: JSON.stringify({ 
+          body: JSON.stringify({
             institutionId: selectedInstitution.id,
             teams: updatedTeams
           }),
@@ -332,21 +340,26 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
   const loadAllChildren = async () => {
     // Fetch children from all institutions (parallel)
     let collectedChildren: any[] = [];
-    
+
+    // 회원가입 시 입력한 기관명 사용 (user.displayName)
+    const actualInstitutionName = user?.displayName || '기관';
+
     await Promise.all(institutions.map(async (inst) => {
       try {
         const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/make-server-edd517d1/child/list/${inst.id}`,
+          `${SUPABASE_FUNCTIONS_BASE_URL}/child/list/${inst.id}`,
           {
             headers: { 'Authorization': `Bearer ${publicAnonKey}` },
           }
         );
         const data = await response.json();
         if (data.success) {
-          // Add institution name to child data
+          // Add institution name to child data (회원가입 시 입력한 기관명 사용)
+          // inst.name = 반 이름 (돌고래반, 금붕어반 등)
           const kids = data.children.map((child: any) => ({
              ...child,
-             institutionName: inst.name
+             institutionName: actualInstitutionName,
+             className: inst.name  // 반 이름 저장 (inst.name이 실제 반 이름)
           }));
           collectedChildren = [...collectedChildren, ...kids];
         }
@@ -354,14 +367,16 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
         console.error(`Failed to load children for ${inst.name}`, error);
       }
     }));
-    
-    // Map to RankingUser format
-    const rankingUsers: RankingUser[] = collectedChildren.map(child => ({
+
+    // Map to RankingUser format - 포인트가 있는 아이만 표시
+    const rankingUsers: RankingUser[] = collectedChildren
+      .filter(child => (child.points || 0) > 0) // 0점인 아이 제외
+      .map(child => ({
         id: child.qrId,
         name: child.name,
-        region: '기관', 
-        organization: child.institutionName, // Show Class Name
-        gamePoints: 0, 
+        region: child.institutionName || '기관', // 기관 순위용: 기관명
+        organization: child.className || '미지정', // 반 순위용: 반 이름 (inst.name에서 가져옴, 돌고래반 등)
+        gamePoints: 0,
         webcamPoints: 0,
         totalPoints: child.points || 0
     }));
@@ -374,7 +389,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
   const loadChildren = async (institutionId: string) => {
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-edd517d1/child/list/${institutionId}`,
+        `${SUPABASE_FUNCTIONS_BASE_URL}/child/list/${institutionId}`,
         {
           headers: {
             'Authorization': `Bearer ${publicAnonKey}`,
@@ -383,34 +398,39 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
       );
       const data = await response.json();
       if (data.success) {
+        // 중복 제거 (qrId 기준)
         const uniqueChildren = Array.from(
           new Map(data.children.map((child: Child) => [child.qrId, child])).values()
         );
         setChildren(uniqueChildren as Child[]);
+        setChildrenLoadError(false);
       }
     } catch (error) {
       console.error('Failed to load children:', error);
+      setChildrenLoadError(true);
+      setChildren([]); // 에러 시 빈 배열로 초기화
     }
   };
 
   // ... (createInstitution, registerChild, handleChangePassword, etc. remain same)
   const createInstitution = async () => {
     if (!newInstitutionName.trim()) return;
-    if (isCreatingInstitution) return; 
+    if (isCreatingInstitution) return;
 
     setIsCreatingInstitution(true);
+
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-edd517d1/institution/create`,
+        `${SUPABASE_FUNCTIONS_BASE_URL}/institution/create`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${publicAnonKey}`,
           },
-          body: JSON.stringify({ 
+          body: JSON.stringify({
             name: newInstitutionName,
-            ownerId: user.uid 
+            ownerId: user.uid
           }),
         }
       );
@@ -432,12 +452,13 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
       alert('모든 정보를 입력해주세요.');
       return;
     }
-    if (isRegistering) return; 
+    if (isRegistering) return;
 
     setIsRegistering(true);
+
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-edd517d1/child/register`,
+        `${SUPABASE_FUNCTIONS_BASE_URL}/child/register`,
         {
           method: 'POST',
           headers: {
@@ -447,7 +468,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
           body: JSON.stringify({
             qrId: scannedQrId,
             name: newChildName,
-            age: newChildAge, 
+            age: newChildAge,
             institutionId: selectedInstitution.id,
             team: newChildTeam || null, // 팀 정보 추가
           }),
@@ -458,7 +479,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
         await loadChildren(selectedInstitution.id);
         // Also reload all children for ranking
         loadAllChildren();
-        
+
         setScannedQrId('');
         setNewChildName('');
         setNewChildAge('');
@@ -484,7 +505,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
 
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-edd517d1/child/delete`,
+        `${SUPABASE_FUNCTIONS_BASE_URL}/child/delete`,
         {
           method: 'DELETE',
           headers: {
@@ -563,7 +584,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
     try {
       if (user.isFallback) {
         const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/make-server-edd517d1/auth/update-password`,
+          `${SUPABASE_FUNCTIONS_BASE_URL}/auth/update-password`,
           {
             method: 'POST',
             headers: {
@@ -728,26 +749,26 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
 
         // 아동 자동 등록 (Auto Register)
         if (selectedInstitution) {
-          const registerPromise = fetch(`https://${projectId}.supabase.co/functions/v1/make-server-edd517d1/child/register`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${publicAnonKey}`,
-            },
-            body: JSON.stringify({
-              qrId: qrId,
-              name: names[i],
-              age: "정보없음", // 나이 정보 기본값
-              institutionId: selectedInstitution.id,
-            }),
-          }).then(res => res.json())
-            .then(data => {
-              if (!data.success) console.error(`Failed to auto-register ${names[i]}:`, data.message);
-              return data;
-            })
-            .catch(err => console.error(`Error registering ${names[i]}:`, err));
-          
-          registerPromises.push(registerPromise);
+          const registerPromise = fetch(`${SUPABASE_FUNCTIONS_BASE_URL}/child/register`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${publicAnonKey}`,
+              },
+              body: JSON.stringify({
+                qrId: qrId,
+                name: names[i],
+                age: "정보없음", // 나이 정보 기본값
+                institutionId: selectedInstitution.id,
+              }),
+            }).then(res => res.json())
+              .then(data => {
+                if (!data.success) console.error(`Failed to auto-register ${names[i]}:`, data.message);
+                return data;
+              })
+              .catch(err => console.error(`Error registering ${names[i]}:`, err));
+
+            registerPromises.push(registerPromise);
         }
 
       } catch (error) {
@@ -804,11 +825,11 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
       // 아동 자동 등록
       if (selectedInstitution) {
         try {
-          const res = await fetch(`https://${projectId}.supabase.co/functions/v1/make-server-edd517d1/child/register`, {
+          const res = await fetch(`${SUPABASE_FUNCTIONS_BASE_URL}/child/register`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': `Bearer ${publicAnonKey}`,
+              Authorization: `Bearer ${publicAnonKey}`,
             },
             body: JSON.stringify({
               qrId: qrId,
@@ -993,7 +1014,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
 
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-edd517d1/institution/delete/${institutionId}`,
+        `${SUPABASE_FUNCTIONS_BASE_URL}/institution/delete/${institutionId}`,
         {
           method: 'DELETE',
           headers: {
@@ -1017,6 +1038,8 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
   if (!selectedInstitution) {
     return (
       <div className="size-full bg-gradient-to-br from-green-50 via-emerald-50 to-teal-50 p-3 sm:p-4 md:p-6 overflow-auto">
+        {/* 데모 모드 배너 */}
+
         <div className="max-w-7xl mx-auto relative z-10">
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 sm:gap-0 mb-6 sm:mb-8 animate-slide-up">
             <div className="flex items-center gap-3 sm:gap-4">
@@ -1251,6 +1274,8 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
   // 기관 선택 후 화면
   return (
     <div className="w-full h-full flex flex-col overflow-hidden">
+      {/* 데모 모드 배너 */}
+
       <div className="bg-white border-b px-4 md:px-6 py-3 flex items-center justify-between z-30 shadow-sm flex-shrink-0">
         <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1">
           <Button 
@@ -1361,11 +1386,19 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
               {children
                 .filter(child => selectedTeamFilter === 'all' || child.team === selectedTeamFilter)
                 .map((child) => (
-                <Card key={child.qrId} className="hover:shadow-md transition-shadow relative overflow-hidden group">
-                  {/* Team Badge */}
-                  {child.team && (
+                <Card
+                  key={child.qrId}
+                  className="hover:shadow-md transition-shadow relative overflow-hidden group cursor-pointer"
+                  onClick={() => {
+                    setSelectedChildForDetail(child);
+                    setShowChildDetailModal(true);
+                  }}
+                >
+                  {/* Game Team Badge - 게임 팀만 표시 */}
+                  {/* className(새 데이터) 또는 team에 "팀"이 포함된 경우(기존 데이터) */}
+                  {(child.className || (child.team && child.team.includes('팀'))) && (
                      <div className="absolute top-0 right-0 bg-green-100 text-green-700 text-[10px] px-2 py-1 rounded-bl-lg font-bold z-10">
-                       {child.team}
+                       {child.className || child.team}
                      </div>
                   )}
                   <CardContent className="p-4 flex items-center justify-between">
@@ -1375,14 +1408,17 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
                       </div>
                       <div>
                         <p className="font-bold text-gray-800">{child.name}</p>
-                        <p className="text-xs text-gray-500 mt-0.5">{child.age}세 • {child.points}점</p>
+                        <p className="text-xs text-gray-500 mt-0.5">{child.age ? `${child.age}세` : '정보없음'} • {child.points}점</p>
                       </div>
                     </div>
                     {/* Delete Button */}
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => deleteChild(child.qrId, child.name)}
+                      onClick={(e) => {
+                        e.stopPropagation(); // 카드 클릭 이벤트 전파 방지
+                        deleteChild(child.qrId, child.name);
+                      }}
                       className="opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700 hover:bg-red-50"
                     >
                       <Trash2 className="size-4" />
@@ -1393,9 +1429,19 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
               
               {children.length === 0 && (
                 <div className="col-span-full text-center py-16 bg-white rounded-xl border border-dashed">
-                  <div className="text-4xl mb-2">👶</div>
-                  <p className="text-gray-500 font-medium">등록된 아동이 없습니다.</p>
-                  <p className="text-gray-400 text-sm mt-1">우측 상단 버튼을 눌러 아이들을 등록해주세요.</p>
+                  {childrenLoadError ? (
+                    <>
+                      <div className="text-4xl mb-2">🔌</div>
+                      <p className="text-gray-500 font-medium">서버 연결이 없어 children 목록은 비어 있습니다</p>
+                      <p className="text-amber-500 text-sm mt-1">(데모 모드)</p>
+                    </>
+                  ) : (
+                    <>
+                      <div className="text-4xl mb-2">👶</div>
+                      <p className="text-gray-500 font-medium">등록된 아동이 없습니다.</p>
+                      <p className="text-gray-400 text-sm mt-1">우측 상단 버튼을 눌러 아이들을 등록해주세요.</p>
+                    </>
+                  )}
                 </div>
               )}
               
@@ -1420,22 +1466,24 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
 
         <TabsContent value="ranking" className="m-0 h-[calc(100%-48px)] overflow-hidden">
            {/* Modified Ranking Screen Logic */}
-           <RankingScreen 
+           <RankingScreen
              isAdmin={true} // Enable scope switching
-             // Pass the current class name to fix "평택대" issue
-             currentOrganization={selectedInstitution.name} 
+             // 회원가입 시 입력한 기관명 사용
+             currentOrganization={user?.displayName || selectedInstitution.name} 
              scopeLabels={{ 
                region: '기관(전체) 순위', 
                organization: '반(현재) 순위' 
              }}
              // 'region' scope mapped to Institution Data (All)
              regionData={allChildren}
-             // 'organization' scope mapped to Class Data (Current)
-             organizationData={children.map(child => ({
+             // 'organization' scope mapped to Class Data (Current) - 포인트가 있는 아이만 표시
+             organizationData={children
+               .filter(child => (child.points || 0) > 0) // 0점인 아이 제외
+               .map(child => ({
                 id: child.qrId,
                 name: child.name,
-                region: '기관', 
-                organization: selectedInstitution?.name,
+                region: user?.displayName || '기관', // 기관 순위용: 기관명
+                organization: selectedInstitution?.name || '미지정', // 반 순위용: 반 이름 (selectedInstitution.name이 반 이름)
                 gamePoints: 0,
                 webcamPoints: 0,
                 totalPoints: child.points || 0
@@ -2036,6 +2084,24 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
               )}
         </div>
       )}
+
+      {/* Child Detail Modal */}
+      <ChildDetailModal
+        open={showChildDetailModal}
+        onOpenChange={setShowChildDetailModal}
+        child={selectedChildForDetail}
+        teams={teams}
+        institutions={institutions} // 반 이동을 위해 전체 institutions 전달
+        institutionId={selectedInstitution?.id || ''}
+        publicAnonKey={publicAnonKey}
+        onChildUpdated={() => {
+          // 아동 정보가 수정되면 목록 새로고침 (반 이동 포함)
+          if (selectedInstitution) {
+            loadChildren(selectedInstitution.id);
+          }
+          loadAllChildren(); // 전체 순위도 새로고침
+        }}
+      />
 
     </div>
   );

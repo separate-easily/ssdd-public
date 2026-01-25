@@ -13,8 +13,8 @@
 // 타입 정의
 // ============================================================
 
-/** 분리배출 카테고리 */
-export type MissionCategory = 'plastic' | 'paper' | 'can' | 'general';
+/** 분리배출 카테고리 (5종류 - RecycleBinType과 동일) */
+export type MissionCategory = 'plastic' | 'paper' | 'vinyl' | 'general' | 'canBotble';
 
 /** 게임 진행 Phase */
 export type MissionPhase =
@@ -53,20 +53,22 @@ const CORRECT_SCORE = 100;
 /** 오답 시 획득 점수 (0점 또는 음수 가능) */
 const WRONG_SCORE = 0;
 
-/** 카테고리 한글 이름 매핑 */
+/** 카테고리 한글 이름 매핑 (5종류) */
 export const CATEGORY_LABELS: Record<MissionCategory, string> = {
-  plastic: '플라스틱',
-  paper: '종이',
-  can: '캔',
+  plastic: '플라스틱류',
+  paper: '종이류',
+  vinyl: '비닐류',
   general: '일반쓰레기',
+  canBotble: '캔 및 병류',
 };
 
-/** 카테고리 이모지 매핑 */
+/** 카테고리 이모지 매핑 (5종류) */
 export const CATEGORY_EMOJIS: Record<MissionCategory, string> = {
   plastic: '🥤',
   paper: '📰',
-  can: '🥫',
+  vinyl: '🛍️',
   general: '🗑️',
+  canBotble: '🥫',
 };
 
 // ============================================================

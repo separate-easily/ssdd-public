@@ -125,76 +125,95 @@ export function RankingScreen({
         {/* Ranking List */}
         <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar">
           {displayData.length > 0 ? (
-            displayData.map((user, index) => (
-              <div
-                key={user.id}
-                className={`flex items-center justify-between p-4 rounded-2xl transition-all hover:scale-[1.02] ${
-                  index === 0
-                    ? 'bg-gradient-to-r from-yellow-100 to-amber-100 border-2 border-yellow-400 shadow-md'
-                    : index === 1
-                    ? 'bg-gradient-to-r from-gray-100 to-slate-200 border-2 border-slate-300 shadow-md'
-                    : index === 2
-                    ? 'bg-gradient-to-r from-orange-100 to-amber-100 border-2 border-orange-300 shadow-md'
-                    : 'bg-white border border-gray-100 shadow-sm'
-                }`}
-              >
-                <div className="flex items-center gap-4">
-                  {/* Rank Badge */}
-                  <div className={`w-10 h-10 flex items-center justify-center rounded-full font-bold text-lg ${
-                    index < 3 ? 'bg-white/80 shadow-sm' : 'bg-gray-100 text-gray-500'
-                  }`}>
-                    {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : index + 1}
-                  </div>
-                  
-                  {/* User Info */}
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-gray-800">{user.name}</span>
-                      {index < 3 && <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-bold">TOP {index + 1}</span>}
-                    </div>
-                    <div className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
-                      {getScopeIcon()}
-                      {scope === 'region' ? (user.region || '지역') : (user.organization || '기관')}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Score & Admin Controls */}
-                <div className="text-right flex items-center gap-3">
-                  <div>
-                    <div className="flex items-center justify-end gap-1 font-bold text-lg text-gray-800">
-                      <Calculator className="size-4 text-orange-500" />
-                      {user.totalPoints.toLocaleString()}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      총점
-                    </div>
-                  </div>
-
-                  {/* Admin Point Controls */}
-                  {isAdmin && onUpdatePoints && (
-                    <div className="flex flex-col gap-1">
-                      <Button 
-                        size="icon" 
-                        variant="outline" 
-                        className="w-6 h-6"
-                        onClick={() => onUpdatePoints(user.id, 10)}
-                      >
-                        <Plus className="size-3" />
-                      </Button>
-                      <Button 
-                        size="icon" 
-                        variant="outline" 
-                        className="w-6 h-6"
-                        onClick={() => onUpdatePoints(user.id, -10)}
-                      >
-                        <Minus className="size-3" />
-                      </Button>
-                    </div>
-                  )}
-                </div>
+            // 모든 사용자가 0점인지 확인
+            displayData.every(user => user.totalPoints === 0) ? (
+              <div className="text-center py-10 text-gray-500">
+                <div className="text-4xl mb-2">🌱</div>
+                <p className="font-medium">아직 점수가 없어요!</p>
+                <p className="text-sm mt-1">게임에 참여해서 포인트를 모아보세요</p>
               </div>
-            ))
+            ) : (
+              displayData.map((user, index) => {
+                // 0점인 사용자는 순위 번호 대신 '-' 표시
+                const hasPoints = user.totalPoints > 0;
+                const rankDisplay = hasPoints
+                  ? (index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : index + 1)
+                  : '-';
+
+                return (
+                  <div
+                    key={user.id}
+                    className={`flex items-center justify-between p-4 rounded-2xl transition-all hover:scale-[1.02] ${
+                      !hasPoints
+                        ? 'bg-gray-50 border border-gray-100 opacity-60'
+                        : index === 0
+                        ? 'bg-gradient-to-r from-yellow-100 to-amber-100 border-2 border-yellow-400 shadow-md'
+                        : index === 1
+                        ? 'bg-gradient-to-r from-gray-100 to-slate-200 border-2 border-slate-300 shadow-md'
+                        : index === 2
+                        ? 'bg-gradient-to-r from-orange-100 to-amber-100 border-2 border-orange-300 shadow-md'
+                        : 'bg-white border border-gray-100 shadow-sm'
+                    }`}
+                  >
+                    <div className="flex items-center gap-4">
+                      {/* Rank Badge */}
+                      <div className={`w-10 h-10 flex items-center justify-center rounded-full font-bold text-lg ${
+                        !hasPoints ? 'bg-gray-100 text-gray-400' : index < 3 ? 'bg-white/80 shadow-sm' : 'bg-gray-100 text-gray-500'
+                      }`}>
+                        {rankDisplay}
+                      </div>
+
+                      {/* User Info */}
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-gray-800">{user.name}</span>
+                          {hasPoints && index < 3 && <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-bold">TOP {index + 1}</span>}
+                        </div>
+                        <div className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
+                          {getScopeIcon()}
+                          {scope === 'region' ? (user.region || '지역') : (user.organization || '기관')}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Score & Admin Controls */}
+                    <div className="text-right flex items-center gap-3">
+                      <div>
+                        <div className={`flex items-center justify-end gap-1 font-bold text-lg ${hasPoints ? 'text-gray-800' : 'text-gray-400'}`}>
+                          <Calculator className={`size-4 ${hasPoints ? 'text-orange-500' : 'text-gray-400'}`} />
+                          {hasPoints ? user.totalPoints.toLocaleString() : '-'}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {hasPoints ? '총점' : '점수 없음'}
+                        </div>
+                      </div>
+
+                      {/* Admin Point Controls */}
+                      {isAdmin && onUpdatePoints && (
+                        <div className="flex flex-col gap-1">
+                          <Button
+                            size="icon"
+                            variant="outline"
+                            className="w-6 h-6"
+                            onClick={() => onUpdatePoints(user.id, 10)}
+                          >
+                            <Plus className="size-3" />
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="outline"
+                            className="w-6 h-6"
+                            onClick={() => onUpdatePoints(user.id, -10)}
+                          >
+                            <Minus className="size-3" />
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )
           ) : (
             <div className="text-center py-10 text-gray-500">
               <div className="text-4xl mb-2">🍃</div>
