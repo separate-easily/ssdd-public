@@ -10,6 +10,7 @@ import type { ChildProfile } from '../../domain/childProfile';
 import { mapSupabaseChildToChildProfile } from '../../domain/childProfile';
 // DEMO_MODE 제거됨 - Supabase만 사용
 import { SUPABASE_FUNCTIONS_BASE_URL, publicAnonKey as anonKey } from '../../../utils/supabase/info';
+import { CAMERA_FEATURE_ENABLED, CAMERA_FEATURE_DISABLED_MESSAGE } from '../config';
 
 interface GameScreenProps {
   institutionId: string;
@@ -1040,6 +1041,11 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
             className="group cursor-pointer hover:shadow-2xl transition-all duration-300 border-2 overflow-hidden relative hover:border-cyan-400"
             onClick={() => setSelectedGame('분리배출')}
           >
+            {!CAMERA_FEATURE_ENABLED && (
+              <div className="absolute top-4 right-4 z-20 bg-orange-500 text-white px-3 py-1 rounded-full text-sm font-bold">
+                점검 중
+              </div>
+            )}
             <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity bg-gradient-to-br from-cyan-100/50 to-green-100/50" />
             <div className="p-8 text-center relative z-10">
               <div className="text-6xl mb-6 transform group-hover:scale-110 transition-transform duration-300">📷</div>
@@ -1060,6 +1066,23 @@ export function GameScreen({ institutionId, institutionName, projectId, publicAn
 
   // 1.5. 분리배출 카메라 게임 화면
   if (selectedGame === '분리배출') {
+    // 카메라 기능이 꺼져 있으면 RecycleCameraGame을 마운트하지 않고 점검 안내만 표시
+    if (!CAMERA_FEATURE_ENABLED) {
+      return (
+        <div className="absolute inset-0 bg-gradient-to-br from-cyan-50 via-teal-50 to-green-50 z-50 flex items-center justify-center p-6">
+          <Card className="max-w-md w-full p-10 text-center rounded-3xl shadow-2xl">
+            <div className="text-6xl mb-6">🛠️</div>
+            <h3 className="text-2xl font-bold text-gray-800 mb-3">분리배출 카메라</h3>
+            <p className="text-gray-600 mb-8">{CAMERA_FEATURE_DISABLED_MESSAGE}</p>
+            <Button onClick={() => setSelectedGame(null)} className="w-full h-14 rounded-2xl text-lg">
+              <ArrowLeft className="mr-2 size-5" />
+              돌아가기
+            </Button>
+          </Card>
+        </div>
+      );
+    }
+
     // children 배열을 ChildProfile로 변환
     const childProfiles: ChildProfile[] = children.map((child) =>
       mapSupabaseChildToChildProfile({

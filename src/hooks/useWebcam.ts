@@ -13,6 +13,7 @@
  */
 
 import { useRef, useState, useEffect, useCallback } from 'react';
+import { CAMERA_FEATURE_ENABLED, CAMERA_FEATURE_DISABLED_MESSAGE } from '../app/config';
 
 // ============================================================
 // 타입 정의
@@ -69,6 +70,12 @@ export function useWebcam(options?: UseWebcamOptions): UseWebcamResult {
    * 카메라 스트림 시작
    */
   const startCamera = useCallback(async () => {
+    if (!CAMERA_FEATURE_ENABLED) {
+      setError(CAMERA_FEATURE_DISABLED_MESSAGE);
+      setIsReady(false);
+      return;
+    }
+
     try {
       setError(null);
       setIsReady(false);

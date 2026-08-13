@@ -7,6 +7,7 @@ import { IDCard } from './IDCard';
 import { WebcamScreen } from './WebcamScreen';
 import { Camera, LogOut } from 'lucide-react';
 import logoImage from '../../assets/08495d2ac9d9702a3eba0824bb37379f02899583.png';
+import { CAMERA_FEATURE_ENABLED, CAMERA_FEATURE_DISABLED_MESSAGE } from '../config';
 
 interface KidHomeProps {
   onLogout: () => void;
@@ -44,6 +45,21 @@ export function KidHome({ onLogout }: KidHomeProps) {
   };
 
   if (showWebcam) {
+    // 카메라 기능이 꺼져 있으면 WebcamScreen을 마운트하지 않고 점검 안내만 표시
+    if (!CAMERA_FEATURE_ENABLED) {
+      return (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6">
+          <div className="max-w-sm w-full bg-white rounded-3xl p-8 text-center">
+            <div className="text-6xl mb-6">🛠️</div>
+            <h3 className="text-2xl font-bold text-gray-800 mb-3">AI 분리수거</h3>
+            <p className="text-gray-600 mb-8">{CAMERA_FEATURE_DISABLED_MESSAGE}</p>
+            <Button onClick={() => setShowWebcam(false)} className="w-full h-14 rounded-2xl text-lg">
+              돌아가기
+            </Button>
+          </div>
+        </div>
+      );
+    }
     return <WebcamScreen onClose={() => setShowWebcam(false)} />;
   }
 
@@ -99,6 +115,11 @@ export function KidHome({ onLogout }: KidHomeProps) {
                 className="group relative h-40 rounded-3xl overflow-hidden shadow-xl transition-transform hover:scale-105"
               >
                 <div className="absolute inset-0 bg-gradient-to-r from-blue-400 to-cyan-400" />
+                {!CAMERA_FEATURE_ENABLED && (
+                  <div className="absolute top-3 right-3 z-10 bg-orange-500 text-white px-3 py-1 rounded-full text-sm font-bold">
+                    점검 중
+                  </div>
+                )}
                 <div className="absolute inset-0 p-6 flex items-center justify-between">
                   <div className="text-left text-white">
                     <h2 className="text-2xl font-bold mb-1">AI 분리수거</h2>

@@ -2,6 +2,7 @@ import { useRef, useEffect, useState } from 'react';
 import { Button } from './ui/button';
 import { Camera, X, RefreshCw } from 'lucide-react';
 import { Card } from './ui/card';
+import { CAMERA_FEATURE_ENABLED } from '../config';
 
 interface WebcamScreenProps {
   onClose: () => void;
@@ -17,8 +18,11 @@ export function WebcamScreen({ onClose }: WebcamScreenProps) {
     let stream: MediaStream | null = null;
 
     const startCamera = async () => {
+      if (!CAMERA_FEATURE_ENABLED) {
+        return;
+      }
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ 
+        stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'environment' } 
         });
         if (videoRef.current) {
