@@ -149,6 +149,7 @@ export function LoginScreen({ onManualLogin }: LoginScreenProps) {
           uid: `supabase:${email}`,
           email: email,
           displayName: loginData.user?.name || loginId,
+          adminToken: loginData.token,
         });
       }
 

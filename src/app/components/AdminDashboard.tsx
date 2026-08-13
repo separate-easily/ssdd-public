@@ -287,6 +287,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${publicAnonKey}`,
+            'X-Admin-Token': user.adminToken,
           },
           body: JSON.stringify({
             institutionId: selectedInstitution.id,
@@ -319,6 +320,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${publicAnonKey}`,
+            'X-Admin-Token': user.adminToken,
           },
           body: JSON.stringify({
             institutionId: selectedInstitution.id,
@@ -427,6 +429,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${publicAnonKey}`,
+            'X-Admin-Token': user.adminToken,
           },
           body: JSON.stringify({
             name: newInstitutionName,
@@ -464,6 +467,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${publicAnonKey}`,
+            'X-Admin-Token': user.adminToken,
           },
           body: JSON.stringify({
             qrId: scannedQrId,
@@ -511,6 +515,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${publicAnonKey}`,
+            'X-Admin-Token': user.adminToken,
           },
           body: JSON.stringify({
             qrId: qrId,
@@ -754,6 +759,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
               headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${publicAnonKey}`,
+                'X-Admin-Token': user.adminToken,
               },
               body: JSON.stringify({
                 qrId: qrId,
@@ -830,6 +836,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
             headers: {
               'Content-Type': 'application/json',
               Authorization: `Bearer ${publicAnonKey}`,
+              'X-Admin-Token': user.adminToken,
             },
             body: JSON.stringify({
               qrId: qrId,
@@ -1019,6 +1026,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
           method: 'DELETE',
           headers: {
             'Authorization': `Bearer ${publicAnonKey}`,
+            'X-Admin-Token': user.adminToken,
           },
         }
       );
@@ -2094,6 +2102,7 @@ export function AdminDashboard({ onLogout, user }: AdminDashboardProps) {
         institutions={institutions} // 반 이동을 위해 전체 institutions 전달
         institutionId={selectedInstitution?.id || ''}
         publicAnonKey={publicAnonKey}
+        adminToken={user.adminToken}
         onChildUpdated={() => {
           // 아동 정보가 수정되면 목록 새로고침 (반 이동 포함)
           if (selectedInstitution) {

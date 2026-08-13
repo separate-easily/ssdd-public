@@ -14,14 +14,117 @@
 
 import { Hono } from "npm:hono";
 import { cors } from "npm:hono/cors";
+import bcrypt from "npm:bcryptjs@2.4.3";
 import * as kv from "./kv_store.tsx";
 
 const app = new Hono().basePath('/server');
 
+// ==================== Auth Helpers ====================
+//
+// Admin credentials and the token signing secret are read from Edge
+// Function secrets (set with `supabase secrets set`), never hardcoded.
+// Required secrets:
+//   ADMIN_EMAIL           - admin login email
+//   ADMIN_PASSWORD_HASH   - bcrypt hash of the admin password
+//   AUTH_JWT_SECRET       - random secret used to sign session tokens
+
+async function verifyAdminCredentials(email: string, password: string): Promise<boolean> {
+  const adminEmail = Deno.env.get("ADMIN_EMAIL");
+  const adminPasswordHash = Deno.env.get("ADMIN_PASSWORD_HASH");
+  if (!adminEmail || !adminPasswordHash) {
+    console.error("ADMIN_EMAIL / ADMIN_PASSWORD_HASH secrets are not configured");
+    return false;
+  }
+  if (email !== adminEmail) return false;
+  return await bcrypt.compare(password, adminPasswordHash);
+}
+
+async function hashPassword(password: string): Promise<string> {
+  return await bcrypt.hash(password, 10);
+}
+
+async function verifyPassword(password: string, hash: string): Promise<boolean> {
+  return await bcrypt.compare(password, hash);
+}
+
+function base64UrlEncode(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function base64UrlDecode(input: string): Uint8Array {
+  const padded = input.replace(/-/g, "+").replace(/_/g, "/").padEnd(input.length + ((4 - (input.length % 4)) % 4), "=");
+  const binary = atob(padded);
+  return Uint8Array.from(binary, (c) => c.charCodeAt(0));
+}
+
+async function getSigningKey(): Promise<CryptoKey> {
+  const secret = Deno.env.get("AUTH_JWT_SECRET");
+  if (!secret) {
+    throw new Error("AUTH_JWT_SECRET secret is not configured");
+  }
+  return await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign", "verify"]
+  );
+}
+
+/** Issues a signed, expiring session token (JWT-compatible HS256 format). */
+async function signToken(payload: Record<string, unknown>, expiresInSeconds = 60 * 60 * 24): Promise<string> {
+  const key = await getSigningKey();
+  const header = { alg: "HS256", typ: "JWT" };
+  const body = { ...payload, iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + expiresInSeconds };
+  const encoder = new TextEncoder();
+  const headerPart = base64UrlEncode(encoder.encode(JSON.stringify(header)));
+  const payloadPart = base64UrlEncode(encoder.encode(JSON.stringify(body)));
+  const signingInput = `${headerPart}.${payloadPart}`;
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(signingInput));
+  const signaturePart = base64UrlEncode(new Uint8Array(signature));
+  return `${signingInput}.${signaturePart}`;
+}
+
+/** Verifies a token issued by signToken(). Returns the payload, or null if invalid/expired. */
+async function verifyToken(token: string): Promise<Record<string, unknown> | null> {
+  try {
+    const [headerPart, payloadPart, signaturePart] = token.split(".");
+    if (!headerPart || !payloadPart || !signaturePart) return null;
+
+    const key = await getSigningKey();
+    const encoder = new TextEncoder();
+    const signingInput = `${headerPart}.${payloadPart}`;
+    const valid = await crypto.subtle.verify("HMAC", key, base64UrlDecode(signaturePart), encoder.encode(signingInput));
+    if (!valid) return null;
+
+    const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadPart)));
+    if (typeof payload.exp === "number" && Date.now() / 1000 > payload.exp) return null;
+
+    return payload;
+  } catch (error) {
+    console.error("Token verification error:", error);
+    return null;
+  }
+}
+
+/** Hono middleware: requires a valid admin session token in the X-Admin-Token header. */
+async function requireAdminAuth(c: any, next: () => Promise<void>) {
+  const token = c.req.header("X-Admin-Token");
+  const payload = token ? await verifyToken(token) : null;
+
+  if (!payload || payload.role !== "admin") {
+    return c.json({ success: false, message: "관리자 인증이 필요합니다." }, 401);
+  }
+
+  return next();
+}
+
 // Enable CORS for all routes
 app.use("/*", cors({
   origin: "*",
-  allowHeaders: ["Content-Type", "Authorization"],
+  allowHeaders: ["Content-Type", "Authorization", "X-Admin-Token"],
   allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   exposeHeaders: ["Content-Length"],
   maxAge: 600,
@@ -76,12 +179,9 @@ app.post("/auth/admin-login", async (c) => {
   try {
     const { email, password } = await c.req.json();
 
-    if (email === "Separaterecycling@ptu.com" && password === "ptu2025") {
-      return c.json({
-        success: true,
-        role: "admin",
-        token: "admin-token-12345"
-      });
+    if (await verifyAdminCredentials(email, password)) {
+      const token = await signToken({ role: "admin", email });
+      return c.json({ success: true, role: "admin", token });
     }
 
     return c.json({ success: false, message: "Invalid credentials" }, 401);
@@ -105,7 +205,7 @@ app.post("/auth/signup", async (c) => {
 
     const userData = {
       email,
-      password,
+      passwordHash: await hashPassword(password),
       name,
       createdAt: new Date().toISOString()
     };
@@ -129,12 +229,9 @@ app.post("/auth/login", async (c) => {
     const { email, password } = await c.req.json();
 
     // Check if admin
-    if (email === "Separaterecycling@ptu.com" && password === "ptu2025") {
-      return c.json({
-        success: true,
-        role: "admin",
-        token: "admin-token-12345"
-      });
+    if (await verifyAdminCredentials(email, password)) {
+      const token = await signToken({ role: "admin", email });
+      return c.json({ success: true, role: "admin", token });
     }
 
     // Check regular user
@@ -143,15 +240,16 @@ app.post("/auth/login", async (c) => {
       return c.json({ success: false, message: "등록되지 않은 이메일입니다." }, 404);
     }
 
-    if (userData.password !== password) {
+    if (!(await verifyPassword(password, userData.passwordHash))) {
       return c.json({ success: false, message: "비밀번호가 일치하지 않습니다." }, 401);
     }
 
+    const token = await signToken({ role: "user", email: userData.email });
     return c.json({
       success: true,
       role: "user",
       user: { email: userData.email, name: userData.name },
-      token: `user-token-${Date.now()}`
+      token
     });
   } catch (error) {
     console.error("Login error:", error);
@@ -169,11 +267,11 @@ app.post("/auth/update-password", async (c) => {
       return c.json({ success: false, message: "사용자를 찾을 수 없습니다." }, 404);
     }
 
-    if (userData.password !== oldPassword) {
+    if (!(await verifyPassword(oldPassword, userData.passwordHash))) {
       return c.json({ success: false, message: "현재 비밀번호가 일치하지 않습니다." }, 401);
     }
 
-    userData.password = newPassword;
+    userData.passwordHash = await hashPassword(newPassword);
     await kv.set(`user:${email}`, userData);
 
     return c.json({ success: true, message: "비밀번호가 성공적으로 변경되었습니다." });
@@ -186,7 +284,7 @@ app.post("/auth/update-password", async (c) => {
 // ==================== Institution Management ====================
 
 // POST /institution/create
-app.post("/institution/create", async (c) => {
+app.post("/institution/create", requireAdminAuth, async (c) => {
   try {
     const { name, ownerId } = await c.req.json();
     const id = `inst_${Date.now()}`;
@@ -250,7 +348,7 @@ app.get("/institution/list", async (c) => {
 });
 
 // DELETE /institution/delete/:institutionId
-app.delete("/institution/delete/:institutionId", async (c) => {
+app.delete("/institution/delete/:institutionId", requireAdminAuth, async (c) => {
   try {
     const institutionId = c.req.param("institutionId");
 
@@ -297,7 +395,7 @@ app.post("/institution/lookup", async (c) => {
 // ==================== Team Management ====================
 
 // POST /institution/teams/update
-app.post("/institution/teams/update", async (c) => {
+app.post("/institution/teams/update", requireAdminAuth, async (c) => {
   try {
     const { institutionId, teams } = await c.req.json();
     await kv.set(`institution:${institutionId}:teams`, teams);
@@ -323,7 +421,7 @@ app.post("/institution/teams/list", async (c) => {
 // ==================== Child Management ====================
 
 // POST /child/register
-app.post("/child/register", async (c) => {
+app.post("/child/register", requireAdminAuth, async (c) => {
   try {
     const { qrId, name, age, institutionId, team } = await c.req.json();
 
@@ -373,7 +471,7 @@ app.get("/child/list/:institutionId", async (c) => {
 });
 
 // POST /child/reset
-app.post("/child/reset", async (c) => {
+app.post("/child/reset", requireAdminAuth, async (c) => {
   try {
     const { qrId, currentInstitutionId } = await c.req.json();
 
@@ -412,7 +510,7 @@ app.post("/child/add-points", async (c) => {
 });
 
 // DELETE /child/delete
-app.delete("/child/delete", async (c) => {
+app.delete("/child/delete", requireAdminAuth, async (c) => {
   try {
     const { qrId, institutionId } = await c.req.json();
     await kv.del(`child:${qrId}:${institutionId}`);
@@ -448,7 +546,7 @@ app.post("/points/update", async (c) => {
 // ==================== Child Update ====================
 
 // POST /child/update - 아동 정보 수정 (이름, 나이, 반, 팀, 포인트 직접 설정)
-app.post("/child/update", async (c) => {
+app.post("/child/update", requireAdminAuth, async (c) => {
   try {
     const { qrId, institutionId, name, age, team, className, points } = await c.req.json();
 
@@ -561,7 +659,7 @@ app.get("/activity-log/list/:childQrId/:institutionId", async (c) => {
 });
 
 // POST /activity-log/update - 활동 로그 수정 (포인트, 정답여부)
-app.post("/activity-log/update", async (c) => {
+app.post("/activity-log/update", requireAdminAuth, async (c) => {
   try {
     const {
       logId,
@@ -612,7 +710,7 @@ app.post("/activity-log/update", async (c) => {
 });
 
 // DELETE /activity-log/delete - 활동 로그 삭제
-app.delete("/activity-log/delete", async (c) => {
+app.delete("/activity-log/delete", requireAdminAuth, async (c) => {
   try {
     const { logId, childQrId, institutionId } = await c.req.json();
 

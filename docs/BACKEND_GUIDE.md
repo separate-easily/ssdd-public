@@ -24,15 +24,33 @@
 
 #### 관리자 로그인
 ```typescript
-POST /make-server-edd517d1/auth/admin-login
+POST /server/auth/admin-login
 
-// 위치: 24줄
-// 수정: 이메일/비밀번호 변경 가능
-
-if (email === "Separaterecycling@ptu.com" && password === "ptu2025") {
-  // 여기서 수정!
-}
+// 관리자 이메일/비밀번호는 코드에 하드코딩되어 있지 않고
+// Edge Function Secrets(ADMIN_EMAIL, ADMIN_PASSWORD_HASH)에서 읽습니다.
+// 비밀번호를 바꾸려면 코드 수정이 아니라 아래 "필수 환경변수" 섹션의
+// `supabase secrets set` 명령으로 새 해시를 다시 설정하세요.
 ```
+
+#### 필수 환경변수 (Edge Function Secrets)
+
+로그인/토큰 기능이 동작하려면 배포 전에 아래 3개 secret을 설정해야 합니다
+(Supabase 대시보드 > Project Settings > Edge Functions, 또는 CLI):
+
+```bash
+# 관리자 로그인 계정
+supabase secrets set ADMIN_EMAIL=admin@example.com
+
+# 관리자 비밀번호의 bcrypt 해시 (평문 비밀번호를 코드/secret에 남기지 않음)
+# 해시는 node -e "console.log(require('bcryptjs').hashSync('원하는비밀번호', 10))" 로 생성
+supabase secrets set ADMIN_PASSWORD_HASH='$2a$10$....'
+
+# 세션 토큰 서명용 무작위 시크릿 (예: openssl rand -base64 32)
+supabase secrets set AUTH_JWT_SECRET='...'
+```
+
+이 값들이 설정되지 않으면 관리자 로그인은 항상 실패하고, 일반 로그인은
+토큰 서명에 실패하며 500 에러를 반환합니다.
 
 #### 일반 사용자 회원가입
 ```typescript

@@ -83,6 +83,7 @@ export interface ChildDetailModalProps {
   institutions?: Institution[]; // 전체 기관(반) 목록 - 반 이동용
   institutionId: string;
   publicAnonKey: string;
+  adminToken?: string;
   onChildUpdated?: () => void;
 }
 
@@ -282,6 +283,7 @@ export function ChildDetailModal({
   institutions = [], // 전체 기관(반) 목록
   institutionId,
   publicAnonKey,
+  adminToken,
   onChildUpdated,
 }: ChildDetailModalProps) {
   // 기관(반) 이름 목록 추출
@@ -392,6 +394,7 @@ export function ChildDetailModal({
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${publicAnonKey}`,
+            'X-Admin-Token': adminToken,
           },
           body: JSON.stringify({
             qrId: child.qrId,
@@ -430,6 +433,7 @@ export function ChildDetailModal({
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${publicAnonKey}`,
+          'X-Admin-Token': adminToken,
         },
         body: JSON.stringify({
           logId,
